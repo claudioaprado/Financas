@@ -174,3 +174,55 @@ func TestTradeValidation(t *testing.T) {
 		t.Errorf("sell with no holding = %v, want ErrOversold", err)
 	}
 }
+
+// TestBackdatedSellRejected locks in the review fix: a sell dated BEFORE its buy
+// (or recorded before its buy on the same date) must be rejected at entry — the
+// guard re-derives the resulting ledger on the insert tx, so it agrees with the
+// chronological read derivation rather than the date-agnostic net quantity.
+func TestBackdatedSellRejected(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	inv, _ := accts.Create(ctx, fmt.Sprintf("BD-%d", run), account.Investment, money.BRL)
+	sec, _ := secs.Create(ctx, fmt.Sprintf("BDSEC%d", run), "S", security.Stock, money.BRL)
+
+	// Buy 10 on 2026-06-10.
+	if _, err := svc.Buy(ctx, inv.ID, sec.ID, req("10"), req("5"), req("0"), d(t, "2026-06-10"), "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	// A sell of 10 dated 2026-06-01 (before the buy) nets to 0 by date-agnostic
+	// math, but is oversold chronologically (nothing held on 06-01) → reject, and
+	// the row must NOT persist (so Holdings still derives cleanly afterward).
+	if _, err := svc.Sell(ctx, inv.ID, sec.ID, req("10"), req("6"), req("0"), d(t, "2026-06-01"), "backdated"); !errors.Is(err, ErrOversold) {
+		t.Errorf("backdated sell = %v, want ErrOversold", err)
+	}
+	views, _, err := svc.Holdings(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("holdings must still derive after a rejected backdated sell: %v", err)
+	}
+	found := false
+	for _, v := range views {
+		if v.SecurityID == sec.ID {
+			found = true
+			if !v.Quantity.Equal(req("10")) {
+				t.Errorf("qty = %s, want 10 (backdated sell must not have persisted)", v.Quantity)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("holding missing — the rejected sell may have persisted and bricked derivation")
+	}
+}

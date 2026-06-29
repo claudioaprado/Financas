@@ -51,11 +51,21 @@ type Holding struct {
 // banker's rounding (intermediates carry decimal.DivisionPrecision, set to 12 in
 // the money package). qtyHeld must be positive (guaranteed by the caller, which
 // rejects an oversell before calling this).
+//
+// The rounded proportional share is clamped to never exceed basisBefore: when the
+// basis carries sub-scale digits and the ratio is near 1, banker's rounding could
+// otherwise push the result just past basisBefore and leave a sub-cent NEGATIVE
+// remaining basis. Clamping guarantees remaining basis (basisBefore − result) is
+// never negative for any partial sell.
 func BasisSold(qtySold, qtyHeld, basisBefore decimal.Decimal) decimal.Decimal {
 	if qtySold.Equal(qtyHeld) {
 		return basisBefore
 	}
-	return basisBefore.Mul(qtySold.Div(qtyHeld)).RoundBank(money.MoneyScale)
+	bs := basisBefore.Mul(qtySold.Div(qtyHeld)).RoundBank(money.MoneyScale)
+	if bs.GreaterThan(basisBefore) {
+		return basisBefore
+	}
+	return bs
 }
 
 // DeriveHoldings folds chronological trade events into per-security holdings

@@ -4,7 +4,7 @@ baseline_commit: 22d47da
 
 # Story 4.2: Investment transactions & derived holdings
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -80,6 +80,22 @@ From `epics.md` → Epic 4 → Story 4.2 (realizes FR-5, FR-4). **Given** a Secu
   - [x] `GOTOOLCHAIN=local go build ./... && go vet ./... && go test ./...` green (DB-gated tests skip without a DB). `make nofloat` stays green — **all new quantity/price/basis math is `shopspring/decimal` in `domain`/`service`; no float32/64 anywhere** (incl. the `quantity/price/fees` round-trip). `gofmt -l` clean.
   - [x] Live smoke (compose db :5433 + run, owner/financas): create an investment account (BRL) + a BRL security; **Buy** 100 @ 10.00 fee 5.00 ⇒ cash −1005.00, holding qty 100 / basis 1005.00 / avg 10.05; **Buy** 100 @ 12.00 fee 0 ⇒ qty 200 / basis 2205.00 / avg 11.025; **Sell** 50 @ 15.00 fee 3.00 ⇒ cash += 747.00, basis_sold = 2205×(50/200)=551.25, realized = 747.00 − 551.25 = 195.75, remaining qty 150 / basis 1653.75; **Sell** all 150 @ 16 ⇒ exact wipe (basis_sold = 1653.75, qty 0, position closed, realized accrues); **Dividend** 40.00 ⇒ cash +40, holding unchanged; **oversell** (sell 999) ⇒ rejected; **cross-currency** (USD security on the BRL account) ⇒ rejected; delete a trade ⇒ holdings re-derive. Persistence across reload.
   - [x] Update `README.md` (investment transactions: buy/sell/dividend on an investment account; holdings derived average-cost on read; fees add to basis on buy / reduce proceeds on sell; oversell rejected; same-currency-only; corrected via delete + re-add; prices/valuation come in 4.3/4.4).
+
+### Review Findings
+
+Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, all Opus) of commit `986aed8` — 2026-06-29. Acceptance Auditor verdict: **ACCEPT** (all 4 ACs + ADs honored; arithmetic core sound). The two adversarial layers independently found one real High correctness bug (guard ↔ derivation divergence). 5 patch, 4 defer, 2 dismissed.
+
+- [x] [Review][Patch][High] Sell oversell guard uses end-of-ledger net quantity (`heldQuantity`) but the read derivation folds chronologically by `occurred_on` — a back-dated sell (or a same-date sell recorded before its buy) passes the guard yet makes `DeriveHoldings` return `ErrOversold` on every later read, blanking the holdings view [internal/service/transaction/transaction.go Sell]. **Fixed**: `Sell` now inserts then re-derives the resulting ledger via `deriveHoldings(ctx, q, …)` on the SAME insert tx and rolls back on `ErrOversold` — the guard is now identical to the read derivation and atomic (resolves the TOCTOU too); `heldQuantity` deleted. New `TestBackdatedSellRejected` locks it in.
+- [x] [Review][Patch] Sell does not validate `price > 0` — **false positive (dismissed)**: the `!price.IsPositive()` check is present in `Sell` (transaction.go) exactly like `Buy`; the Blind Hunter (diff-only) misread the hunk, the Acceptance Auditor confirmed it present. No change.
+- [x] [Review][Patch] `BasisSold` partial branch can `RoundBank` past `basisBefore`, leaving a sub-cent negative remaining basis [internal/domain/holding.go BasisSold]. **Fixed**: clamp `if bs > basisBefore { return basisBefore }`; doc comment updated.
+- [x] [Review][Patch] `TestInvestmentAccountDetail` comment claims "cash goes negative" but never asserts it [internal/http/router_test.go]. **Fixed**: now asserts `-50.0000 USD` after the buy.
+- [x] [Review][Patch] Dead `_ = acct` in `heldQuantity` — **fixed** (heldQuantity deleted in the guard refactor).
+- [x] [Review][Defer] One oversold security aborts `DeriveHoldings` for the whole account (returns nil) — after the guard fix this is only reachable by deleting a buy out from under a sell; per-security error isolation is a follow-up [internal/domain/holding.go].
+- [x] [Review][Defer] Non-`ErrOversold` Holdings/Balance errors are swallowed in `renderInvestmentDetail` (blank page, no diagnostic) — same project-wide swallow pattern deferred from 4.1 (accounts/categories/exchange-rates) [internal/http/router.go].
+- [x] [Review][Defer] Cash leg (`NUMERIC(19,4)` `from_amount`/`to_amount`) and the full-precision derived basis/proceeds diverge sub-cent for fractional-share trades whose `qty×price` carries >4dp — a modeling nuance consistent with the spine's "full-precision intermediates, round at display"; revisit if statement reconciliation ever needs cent-exact cash==basis [internal/service/transaction/transaction.go].
+- [x] [Review][Defer] Raw DB errors echoed to the client via `err.Error()` on a constraint/precision failure — project-wide pattern (deferred from 4.1) [internal/http/router.go trade handlers].
+
+Dismissed: the oversell-guard TOCTOU (resolved by the in-tx re-derive fix above); the stub `Sell` re-implementing `basis_sold` rounding (a test double — not bound by AD-10's single-home rule). Confirmed clean by all layers: no bespoke sqlc `*Row` types, column order correct, the single shared `BasisSold` genuinely reconciles remaining basis + realized gain, AvgCost divide-by-zero guarded, Register debit/credit routing correct, zero-crossing exact wipe.
 
 ## Dev Notes
 
@@ -192,3 +208,4 @@ Modified:
 | --- | --- |
 | 2026-06-29 | Story 4.2 drafted (create-story): `00010` investment columns + type-CHECK widen; `domain` `Holding`/`DeriveHoldings`/`BasisSold` (average-cost, zero-crossing wipe); `service/transaction` Buy/Sell/Dividend + Holdings; investment account-detail UI. Decisions applied: same-currency-only, fees reduce proceeds, oversell reject, dividend = cash amount, no in-place edit (delete+re-add). Status → ready-for-dev. |
 | 2026-06-29 | Story 4.2 implemented (dev-story): `00010` ledger extension; `domain.BasisSold`/`DeriveHoldings` (single shared basis_sold, exact zero-crossing wipe); `service/transaction` Buy/Sell/Dividend + Holdings (oversell + same-currency guards); investment account-detail UI (holdings + trade forms + delete). All 4 ACs verified (domain unit + live DB + live HTTP incl. oversell→400, cross-currency→400). build/vet/test/nofloat green. Status → review. |
+| 2026-06-29 | Code review (3 adversarial layers, Auditor ACCEPT): fixed the High guard↔derivation divergence (Sell now re-derives in-tx, rejecting back-dated/same-date oversells atomically; `heldQuantity` removed; `TestBackdatedSellRejected` added), clamped `BasisSold` ≤ basisBefore (no negative-basis crumb), and hardened the http test (cash-negative assertion). 4 findings deferred (project-wide swallow / err leak, per-security oversold isolation, fractional sub-cent cash-vs-basis); Sell price-validation finding was a false positive (already present). Status → done. |

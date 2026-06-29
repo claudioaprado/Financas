@@ -366,33 +366,44 @@ func (s *Service) Sell(ctx context.Context, accountID, securityID int64, quantit
 	if fees.IsNegative() {
 		return Transaction{}, ErrNegativeFees
 	}
-	// Oversell guard: derive the currently-held quantity for this security in
-	// this account (exact NUMERIC(28,10) compare, no epsilon — Epic 4 decision).
-	held, err := s.heldQuantity(ctx, accountID, securityID)
-	if err != nil {
-		return Transaction{}, err
-	}
-	if quantity.GreaterThan(held) {
-		return Transaction{}, ErrOversold
-	}
 	proceeds := quantity.Mul(price).Sub(fees)
 	if proceeds.IsNegative() {
 		return Transaction{}, ErrNegativeProceeds
 	}
-	row, err := s.insertTrade(ctx, store.CreateTransactionParams{
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Transaction{}, fmt.Errorf("transaction: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := store.New(tx)
+	row, err := q.CreateTransaction(ctx, store.CreateTransactionParams{
 		Type:        string(Sell),
 		ToAccountID: idParam(accountID),
 		FromAmount:  decimal.Zero,
 		ToAmount:    proceeds,
 		OccurredOn:  date,
 		Description: description,
+		CategoryID:  pgtype.Int8{},
 		SecurityID:  idParam(securityID),
 		Quantity:    quantity,
 		Price:       price,
 		Fees:        fees,
 	})
 	if err != nil {
-		return Transaction{}, err
+		return Transaction{}, fmt.Errorf("transaction: insert sell: %w", err)
+	}
+	// Oversell guard: re-derive the resulting ledger ON THIS SAME TX. If inserting
+	// this sell makes any position go negative at any chronological point — an
+	// oversell, a back-dated sell, or a same-date sell recorded before its buy —
+	// DeriveHoldings returns ErrOversold and the deferred Rollback undoes the
+	// insert. This makes the guard identical to the read derivation and atomic
+	// (no TOCTOU; exact NUMERIC(28,10) compare, no epsilon — Epic 4 decision).
+	if _, _, derr := s.deriveHoldings(ctx, q, accountID); derr != nil {
+		return Transaction{}, derr
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Transaction{}, fmt.Errorf("transaction: commit: %w", err)
 	}
 	return toTransaction(accountID, row, nil, nil, nil), nil
 }
@@ -442,22 +453,6 @@ func (s *Service) insertTrade(ctx context.Context, params store.CreateTransactio
 	return row, nil
 }
 
-// heldQuantity derives the quantity currently held for one security in one
-// account, via the canonical domain derivation (AD-10).
-func (s *Service) heldQuantity(ctx context.Context, accountID, securityID int64) (decimal.Decimal, error) {
-	acct, holdings, err := s.deriveHoldings(ctx, accountID)
-	if err != nil {
-		return decimal.Zero, err
-	}
-	_ = acct
-	for _, h := range holdings {
-		if h.SecurityID == securityID {
-			return h.Quantity, nil
-		}
-	}
-	return decimal.Zero, nil
-}
-
 // HoldingView is one derived position formatted for display: quantity, average
 // cost (basis ÷ quantity), cost basis, and cumulative realized gain — all in the
 // account's native currency. Market value / unrealized gain need a Price (4.3/4.4).
@@ -476,12 +471,12 @@ type HoldingView struct {
 // the account's native currency (AD-2/AD-10). It surfaces domain.ErrOversold when
 // the ledger is inconsistent (e.g. a buy was deleted under a later sell).
 func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView, money.Money, error) {
-	acct, holdings, err := s.deriveHoldings(ctx, accountID)
+	q := store.New(s.pool)
+	acct, holdings, err := s.deriveHoldings(ctx, q, accountID)
 	if err != nil {
 		return nil, money.Money{}, err
 	}
 	cur := money.Currency(acct.Currency)
-	q := store.New(s.pool)
 	meta, err := securityMeta(ctx, q)
 	if err != nil {
 		return nil, money.Money{}, err
@@ -509,9 +504,10 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 
 // deriveHoldings loads the account and folds its investment ledger rows
 // (chronological) into the canonical domain holdings. It is the single read path
-// behind both Holdings and the oversell guard.
-func (s *Service) deriveHoldings(ctx context.Context, accountID int64) (store.Account, []domain.Holding, error) {
-	q := store.New(s.pool)
+// behind both Holdings and the Sell oversell guard. The caller passes the queries
+// handle so the Sell guard can re-derive on the SAME transaction as its insert
+// (making the guard identical to the read derivation, and atomic).
+func (s *Service) deriveHoldings(ctx context.Context, q *store.Queries, accountID int64) (store.Account, []domain.Holding, error) {
 	acct, err := q.GetAccount(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Account{}, nil, ErrAccountNotFound

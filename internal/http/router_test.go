@@ -1105,10 +1105,13 @@ func TestInvestmentAccountDetail(t *testing.T) {
 		t.Errorf("investment detail missing holdings/cash sections")
 	}
 
-	// Buy 10 @ 5 fee 0 → holding shows; cash goes negative.
+	// Buy 10 @ 5 fee 0 → holding shows; cash goes negative by the cost (50).
 	post("/accounts/1/buy", "security_id=1&quantity=10&price=5&fees=0&date=2026-06-01", http.StatusSeeOther)
 	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
 		t.Errorf("holdings table missing the bought security")
+	}
+	if b := body("/accounts/1"); !strings.Contains(b, "-50.0000 USD") {
+		t.Errorf("cash balance should be -50.0000 USD after the buy")
 	}
 
 	// Sell 4 @ 6 → ok. Oversell 999 → rejected (400).
