@@ -35,6 +35,26 @@ func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (A
 	return i, err
 }
 
+const getAccount = `-- name: GetAccount :one
+SELECT id, name, type, currency, archived, created_at
+FROM account
+WHERE id = $1
+`
+
+func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccount, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Type,
+		&i.Currency,
+		&i.Archived,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listActiveAccounts = `-- name: ListActiveAccounts :many
 SELECT id, name, type, currency, archived, created_at
 FROM account

@@ -22,6 +22,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/auth"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/settings"
+	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -71,6 +72,7 @@ func main() {
 			Settings:      settings.New(pool),
 			ExchangeRates: exchangerate.New(pool),
 			Accounts:      account.New(pool),
+			Transactions:  transaction.New(pool),
 			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

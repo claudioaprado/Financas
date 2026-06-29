@@ -15,6 +15,7 @@ import (
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
+	"github.com/claudioaprado/financas/internal/service/transaction"
 )
 
 type stubAuth struct{ ok bool }
@@ -115,11 +116,91 @@ func (s *stubAccounts) SetArchived(_ context.Context, id int64, archived bool) e
 	return account.ErrNotFound
 }
 
+func (s *stubAccounts) Get(_ context.Context, id int64) (account.Account, error) {
+	for _, a := range s.accts {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return account.Account{}, account.ErrNotFound
+}
+
 func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.Account, error) {
 	out := []account.Account{}
 	for _, a := range s.accts {
 		if includeArchived || !a.Archived {
 			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// stubTransactions is an in-memory Transactions for handler tests. It derives a
+// simple balance (USD) from its recorded rows.
+type stubTransactions struct {
+	txns   []transaction.Transaction
+	nextID int64
+}
+
+func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string) (transaction.Transaction, error) {
+	if !typ.IsValid() {
+		return transaction.Transaction{}, transaction.ErrInvalidType
+	}
+	if !amount.IsPositive() {
+		return transaction.Transaction{}, transaction.ErrNonPositiveAmount
+	}
+	s.nextID++
+	t := transaction.Transaction{ID: s.nextID, Type: typ, AccountID: accountID, Amount: amount, Date: date, Description: desc}
+	s.txns = append(s.txns, t)
+	return t, nil
+}
+
+func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string) error {
+	if !typ.IsValid() {
+		return transaction.ErrInvalidType
+	}
+	if !amount.IsPositive() {
+		return transaction.ErrNonPositiveAmount
+	}
+	for i := range s.txns {
+		if s.txns[i].ID == txID {
+			s.txns[i].Type, s.txns[i].Amount, s.txns[i].Date, s.txns[i].Description = typ, amount, date, desc
+			return nil
+		}
+	}
+	return transaction.ErrTxNotFound
+}
+
+func (s *stubTransactions) Delete(_ context.Context, txID int64) error {
+	for i := range s.txns {
+		if s.txns[i].ID == txID {
+			s.txns = append(s.txns[:i], s.txns[i+1:]...)
+			return nil
+		}
+	}
+	return transaction.ErrTxNotFound
+}
+
+func (s *stubTransactions) Balance(_ context.Context, accountID int64) (money.Money, error) {
+	net := decimal.Zero
+	for _, t := range s.txns {
+		if t.AccountID != accountID {
+			continue
+		}
+		if t.Type == transaction.Income {
+			net = net.Add(t.Amount)
+		} else {
+			net = net.Sub(t.Amount)
+		}
+	}
+	return money.New(net, money.USD), nil
+}
+
+func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transaction.Transaction, error) {
+	out := []transaction.Transaction{}
+	for _, t := range s.txns {
+		if t.AccountID == accountID {
+			out = append(out, t)
 		}
 	}
 	return out, nil
@@ -135,6 +216,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Settings:      &stubSettings{},
 		ExchangeRates: &stubExchangeRates{},
 		Accounts:      &stubAccounts{},
+		Transactions:  &stubTransactions{},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -433,6 +515,79 @@ func TestAccountsInvalidCreate(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST empty-name account = %d, want 400", rec.Code)
 	}
+}
+
+func TestAccountDetailRequiresAuth(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/accounts/1", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("unauth GET /accounts/1 = %d -> %q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestAccountTransactionsFlow(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Create a cash USD account (becomes id 1 in the stub).
+	recAcct := httptest.NewRecorder()
+	mk := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Wallet&type=cash&currency=USD"))
+	mk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAcct, withCookie(mk, cookie))
+	if recAcct.Code != http.StatusSeeOther {
+		t.Fatalf("create account = %d, want 303", recAcct.Code)
+	}
+
+	get := func() string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1", nil), cookie))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /accounts/1 = %d, want 200", rec.Code)
+		}
+		return rec.Body.String()
+	}
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+
+	// Empty register, zero balance.
+	if body := get(); !strings.Contains(body, "Add transaction") || !strings.Contains(body, "0.0000 USD") {
+		t.Errorf("fresh detail page missing add form or zero balance")
+	}
+
+	// Income 100 (tx id 1), expense 30 (tx id 2) -> balance 70.
+	post("/accounts/1/transaction", "type=income&amount=100&date=2024-01-05&description=salary", http.StatusSeeOther)
+	post("/accounts/1/transaction", "type=expense&amount=30&date=2024-01-06&description=food", http.StatusSeeOther)
+	body := get()
+	for _, want := range []string{"+100.0000 USD", "-30.0000 USD", "70.0000 USD", "salary", "food"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("register missing %q", want)
+		}
+	}
+
+	// Edit the expense (tx 2) 30 -> 50 -> balance 50.
+	post("/accounts/1/transaction/edit", "tx_id=2&type=expense&amount=50&date=2024-01-06&description=food", http.StatusSeeOther)
+	if body := get(); !strings.Contains(body, "50.0000 USD") {
+		t.Errorf("balance after edit should be 50.0000 USD")
+	}
+
+	// Delete the income (tx 1) -> balance -50.
+	post("/accounts/1/transaction/delete", "tx_id=1", http.StatusSeeOther)
+	if body := get(); !strings.Contains(body, "-50.0000 USD") {
+		t.Errorf("balance after deleting income should be -50.0000 USD")
+	}
+
+	// Invalid amount is rejected without crashing.
+	post("/accounts/1/transaction", "type=income&amount=abc&date=2024-01-07", http.StatusBadRequest)
 }
 
 func TestCSRFRejectsCrossOrigin(t *testing.T) {

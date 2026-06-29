@@ -132,6 +132,16 @@ cash balance, credit tracks a balance owed — but no balance is stored: balance
 and Net Worth are **derived from the transaction ledger on read** in later epics
 (AD-2), so the page shows the balance label with a `—` placeholder for now.
 
+**Transactions** are the ledger (`transaction`) — the single source of truth
+from which balances (and later holdings, valuation, net worth) are **derived on
+read**, never stored (AD-2). One canonical row shape debits `from_account` and
+credits `to_account` (AD-9): an **Income** credits a cash account, an **Expense**
+debits it (Story 3.1; transfers populate both sides later). Amounts are
+non-negative magnitudes at `NUMERIC(19,4)`, with direction from `type` (AD-4).
+An account's balance is computed by the single canonical `domain.AccountBalance`
+function (AD-10) — open an account from `/accounts` to record income/expense and
+see the balance re-derive as you add, edit, or delete rows.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

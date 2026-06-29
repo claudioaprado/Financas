@@ -112,7 +112,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 					for _, a := range accounts {
 						<tr class="border-t border-black/5">
 							<td class="py-1">
-								{ a.Name }
+								<a href={ templ.URL("/accounts/" + accountID(a.ID)) } class="text-accent hover:underline">{ a.Name }</a>
 								if a.Archived {
 									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">archived</span>
 								}
@@ -139,6 +139,110 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 											<input type="hidden" name="archived" value="true"/>
 											<button class="rounded border px-2 py-1" type="submit">Archive</button>
 										}
+									</form>
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// AccountDetailPage shows one account's derived balance and its income/expense
+// register, with an add/edit form and per-row delete (Story 3.1). The balance is
+// derived on read by domain.AccountBalance (AD-2/AD-10); the signed amounts are
+// presentation only.
+templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balance string, types []string, txns []TxRow, editing bool, edit TxRow, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
+			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
+			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
+			<p class="text-sm text-muted">{ accType } · { currency }</p>
+			<div class="mt-4">
+				<p class="text-sm text-muted">Balance</p>
+				<p class="text-3xl font-bold">{ balance }</p>
+			</div>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<h2 class="mt-6 text-sm font-semibold text-muted">
+				if editing {
+					Edit transaction
+				} else {
+					Add transaction
+				}
+			</h2>
+			<form
+				method="post"
+				if editing {
+					action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/edit") }
+				} else {
+					action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction") }
+				}
+				class="mt-2 flex flex-wrap items-end gap-2"
+			>
+				if editing {
+					<input type="hidden" name="tx_id" value={ accountID(edit.ID) }/>
+				}
+				<div>
+					<label class="block text-xs" for="type">Type</label>
+					<select id="type" name="type" class="rounded border px-2 py-1">
+						for _, ty := range types {
+							<option value={ ty } selected?={ editing && ty == edit.Type }>{ ty }</option>
+						}
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs" for="amount">Amount</label>
+					<input id="amount" name="amount" inputmode="decimal" required value={ edit.Amount } class="w-28 rounded border px-2 py-1"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="date">Date</label>
+					<input id="date" name="date" type="date" required value={ edit.Date } class="rounded border px-2 py-1"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="description">Description</label>
+					<input id="description" name="description" value={ edit.Description } class="w-48 rounded border px-2 py-1"/>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">
+					if editing {
+						Save
+					} else {
+						Add
+					}
+				</button>
+				if editing {
+					<a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-sm text-accent hover:underline">Cancel</a>
+				}
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Date</th>
+						<th>Type</th>
+						<th>Description</th>
+						<th class="text-right">Amount</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(txns) == 0 {
+						<tr><td colspan="5" class="py-2 text-muted">No transactions yet.</td></tr>
+					}
+					for _, tr := range txns {
+						<tr class="border-t border-black/5">
+							<td class="py-1">{ tr.Date }</td>
+							<td>{ tr.Type }</td>
+							<td>{ tr.Description }</td>
+							<td class={ "text-right", templ.KV("text-gain", tr.IsIncome), templ.KV("text-loss", !tr.IsIncome) }>{ tr.Signed }</td>
+							<td>
+								<div class="flex items-center justify-end gap-2">
+									<a href={ templ.URL("/accounts/" + accountID(acctID) + "?edit=" + accountID(tr.ID)) } class="rounded border px-2 py-1">Edit</a>
+									<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/delete") }>
+										<input type="hidden" name="tx_id" value={ accountID(tr.ID) }/>
+										<button class="rounded border px-2 py-1" type="submit">Delete</button>
 									</form>
 								</div>
 							</td>

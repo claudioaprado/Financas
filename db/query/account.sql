@@ -3,6 +3,11 @@ INSERT INTO account (name, type, currency)
 VALUES ($1, $2, $3)
 RETURNING id, name, type, currency, archived, created_at;
 
+-- name: GetAccount :one
+SELECT id, name, type, currency, archived, created_at
+FROM account
+WHERE id = $1;
+
 -- name: RenameAccount :execrows
 UPDATE account SET name = $2 WHERE id = $1;
 

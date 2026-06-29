@@ -21,6 +21,7 @@ import (
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
+	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/web"
 )
 
@@ -53,9 +54,21 @@ type ExchangeRates interface {
 // here (consumer side) and implemented by service/account.
 type Accounts interface {
 	Create(ctx context.Context, name string, typ account.AccountType, currency money.Currency) (account.Account, error)
+	Get(ctx context.Context, id int64) (account.Account, error)
 	Rename(ctx context.Context, id int64, name string) error
 	SetArchived(ctx context.Context, id int64, archived bool) error
 	List(ctx context.Context, includeArchived bool) ([]account.Account, error)
+}
+
+// Transactions records, edits, deletes, lists, and derives balances for cash
+// income/expense. Defined here (consumer side) and implemented by
+// service/transaction.
+type Transactions interface {
+	Record(ctx context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
+	Edit(ctx context.Context, accountID, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) error
+	Delete(ctx context.Context, txID int64) error
+	Balance(ctx context.Context, accountID int64) (money.Money, error)
+	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -66,6 +79,7 @@ type Deps struct {
 	Settings      Settings
 	ExchangeRates ExchangeRates
 	Accounts      Accounts
+	Transactions  Transactions
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -119,6 +133,10 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts", accountsCreate(deps))
 		pr.Post("/accounts/rename", accountsRename(deps))
 		pr.Post("/accounts/archive", accountsArchive(deps))
+		pr.Get("/accounts/{id}", accountDetail(deps))
+		pr.Post("/accounts/{id}/transaction", txCreate(deps))
+		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
+		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -285,6 +303,151 @@ func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, include
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.AccountsPage(shellData(deps, req.Context(), "accounts"), rows, types, codes, includeArchived, errMsg).Render(req.Context(), w)
+}
+
+func accountDetail(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		editID, _ := strconv.ParseInt(req.URL.Query().Get("edit"), 10, 64) // 0 if absent/invalid
+		renderAccountDetail(deps, w, req, acctID, editID, "", http.StatusOK)
+	}
+}
+
+func txCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		typ, amount, date, desc, ok := parseTxForm(req)
+		if !ok {
+			renderAccountDetail(deps, w, req, acctID, 0, "Enter a valid amount and date.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Transactions.Record(req.Context(), acctID, typ, amount, date, desc); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not add transaction: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+func txEdit(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		txID, err := strconv.ParseInt(req.PostFormValue("tx_id"), 10, 64)
+		if err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Invalid transaction id.", http.StatusBadRequest)
+			return
+		}
+		typ, amount, date, desc, ok := parseTxForm(req)
+		if !ok {
+			renderAccountDetail(deps, w, req, acctID, txID, "Enter a valid amount and date.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Transactions.Edit(req.Context(), acctID, txID, typ, amount, date, desc); err != nil {
+			renderAccountDetail(deps, w, req, acctID, txID, "Could not save transaction: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+func txDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		txID, err := strconv.ParseInt(req.PostFormValue("tx_id"), 10, 64)
+		if err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Invalid transaction id.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Transactions.Delete(req.Context(), txID); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not delete transaction: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+// parsePathID reads the numeric {id} path parameter.
+func parsePathID(req *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	return id, err == nil
+}
+
+// parseTxForm parses the shared transaction form fields (type/amount/date/
+// description). Amount is parsed as a decimal string, never a float (AD-4).
+func parseTxForm(req *http.Request) (typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, ok bool) {
+	if err := req.ParseForm(); err != nil {
+		return "", decimal.Decimal{}, time.Time{}, "", false
+	}
+	typ = transaction.TxType(req.PostFormValue("type"))
+	amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
+	date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
+	if aErr != nil || dErr != nil {
+		return "", decimal.Decimal{}, time.Time{}, "", false
+	}
+	return typ, amount, date, req.PostFormValue("description"), true
+}
+
+func accountPath(id int64) string { return "/accounts/" + strconv.FormatInt(id, 10) }
+
+func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, acctID, editID int64, errMsg string, code int) {
+	acct, err := deps.Accounts.Get(req.Context(), acctID)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	balStr := ""
+	if bal, bErr := deps.Transactions.Balance(req.Context(), acctID); bErr == nil {
+		balStr = bal.String()
+	}
+	var rows []web.TxRow
+	var edit web.TxRow
+	editing := false
+	if txns, lErr := deps.Transactions.List(req.Context(), acctID); lErr == nil {
+		for _, t := range txns {
+			isIncome := t.Type == transaction.Income
+			sign := "+"
+			if !isIncome {
+				sign = "-"
+			}
+			row := web.TxRow{
+				ID:          t.ID,
+				Type:        string(t.Type),
+				Date:        t.Date.Format("2006-01-02"),
+				Description: t.Description,
+				Amount:      t.Amount.String(),
+				Signed:      sign + money.New(t.Amount, acct.Currency).String(),
+				IsIncome:    isIncome,
+			}
+			rows = append(rows, row)
+			if editID != 0 && t.ID == editID {
+				edit = row
+				editing = true
+			}
+		}
+	}
+	if !editing {
+		edit = web.TxRow{Type: string(transaction.Income), Date: time.Now().Format("2006-01-02")}
+	}
+	types := []string{string(transaction.Income), string(transaction.Expense)}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balStr, types, rows, editing, edit, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

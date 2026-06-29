@@ -33,6 +33,19 @@ type AccountRow struct {
 	Archived     bool
 }
 
+// TxRow is one transaction formatted for the account register. Amount is the
+// raw magnitude (for editing); Signed is the display string with a +/- sign and
+// currency derived from Type (presentation only, never recomputed math).
+type TxRow struct {
+	ID          int64
+	Type        string // "income" | "expense"
+	Date        string // YYYY-MM-DD
+	Description string
+	Amount      string // magnitude, for the edit form
+	Signed      string // e.g. "+100.0000 USD" / "-30.0000 USD"
+	IsIncome    bool   // drives green/red styling
+}
+
 // NavItem is one top-navigation entry.
 type NavItem struct {
 	Label string

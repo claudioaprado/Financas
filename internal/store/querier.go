@@ -7,13 +7,18 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
 )
 
 type Querier interface {
 	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
+	DeleteTransaction(ctx context.Context, id int64) (int64, error)
+	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
+	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)
 	ListAllAccounts(ctx context.Context) ([]Account, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
@@ -22,6 +27,7 @@ type Querier interface {
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
+	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/claudioaprado/financas/internal/money"
@@ -158,6 +159,18 @@ func (s *Service) SetArchived(ctx context.Context, id int64, archived bool) erro
 		return fmt.Errorf("account: commit: %w", err)
 	}
 	return nil
+}
+
+// Get returns one account by id, or ErrNotFound if none matches.
+func (s *Service) Get(ctx context.Context, id int64) (Account, error) {
+	row, err := store.New(s.pool).GetAccount(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Account{}, ErrNotFound
+	}
+	if err != nil {
+		return Account{}, fmt.Errorf("account: get: %w", err)
+	}
+	return toAccount(row), nil
 }
 
 // List returns accounts ordered by name. With includeArchived false (the default

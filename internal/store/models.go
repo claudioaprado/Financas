@@ -38,3 +38,15 @@ type ExchangeRate struct {
 	Rate          decimal.Decimal
 	CreatedAt     pgtype.Timestamptz
 }
+
+type Transaction struct {
+	ID            int64
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	FromAmount    decimal.Decimal
+	ToAmount      decimal.Decimal
+	OccurredOn    time.Time
+	Description   string
+	CreatedAt     pgtype.Timestamptz
+}
