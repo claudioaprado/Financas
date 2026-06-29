@@ -1,0 +1,8 @@
+# Deferred Work
+
+## Deferred from: code review of 4-1-manage-securities (2026-06-29)
+
+- **`List`-error swallowing renders a misleading empty page (HTTP 200) on a DB outage** — `internal/http/router.go` `renderSecurities`. Pre-existing project-wide convention: accounts (`renderAccounts`), categories (`renderCategories`), and exchange-rates (`renderExchangeRates`) all use `if x, err := …; err == nil` and silently drop the error. Should be fixed across the whole `http` layer at once (surface/log the error, return a non-200), not piecemeal in securities.
+- **Raw wrapped DB errors echoed to the client via `err.Error()`** — `internal/http/router.go` `securitiesCreate` (and the same pattern in account/category create). On any non-23505 insert failure the internal error string is shown to the user. Low risk for a single-owner private app; clean up project-wide.
+- **No max-length / interior-whitespace / charset validation on free-text fields** — `internal/service/security/security.go` `Create` (and the account/category baseline). Columns are unbounded `TEXT`; inputs like `"PE TR 4"` or very long strings are accepted. Consider a shared validation helper + DB length caps if this ever matters.
+- **`UNIQUE(symbol)` is byte-exact, not a true case-insensitive backstop** — `db/migrations/00009_securities.sql`. Case-insensitive dedup currently holds only because `service/security.Create` upper-cases before insert (and AD-3 routes all writes through the service). If a non-service write path is ever introduced (e.g. a securities file-import or restore), switch to a functional unique index `UNIQUE (upper(symbol))` so the DB enforces it independently.

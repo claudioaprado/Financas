@@ -969,10 +969,12 @@ func TestSecuritiesPage(t *testing.T) {
 		t.Fatalf("unauth GET /securities = %d, want 303", recUnauth.Code)
 	}
 
-	// Create a security and see it listed (symbol upper-cased, ETF label rendered).
-	post("/securities", "symbol=voo&name=Vanguard+S%26P+500+ETF&type=etf&quote_currency=USD", http.StatusSeeOther)
-	if b := body("/securities"); !strings.Contains(b, "VOO") || !strings.Contains(b, "ETF") {
-		t.Errorf("securities page missing the created security")
+	// Create a security and see its row listed. Assert on the upper-cased symbol
+	// and the unique name — NOT the bare "ETF" label, which always appears in the
+	// type <select> and would make that check vacuous.
+	post("/securities", "symbol=voo&name=Vanguard+500+Index&type=etf&quote_currency=USD", http.StatusSeeOther)
+	if b := body("/securities"); !strings.Contains(b, "VOO") || !strings.Contains(b, "Vanguard 500 Index") {
+		t.Errorf("securities page missing the created security row")
 	}
 
 	// Duplicate symbol (case-insensitive) is rejected and adds no second row.
@@ -981,8 +983,11 @@ func TestSecuritiesPage(t *testing.T) {
 		t.Errorf("duplicate symbol should not add a second row")
 	}
 
-	// Unsupported currency is rejected.
+	// Unsupported currency is rejected AND the row is not persisted.
 	post("/securities", "symbol=PETR4&name=Petrobras&type=stock&quote_currency=EUR", http.StatusBadRequest)
+	if b := body("/securities"); strings.Contains(b, "PETR4") {
+		t.Errorf("a security with an unsupported currency must not be persisted")
+	}
 }
 
 func TestTransactionsRegister(t *testing.T) {

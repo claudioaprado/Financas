@@ -4,7 +4,7 @@ baseline_commit: ce02dcf
 
 # Story 4.1: Manage securities
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -72,6 +72,19 @@ From `epics.md` → Epic 4 → Story 4.1 (realizes FR-3). **Given** I am authent
   - [x] `GOTOOLCHAIN=local go build ./... && go vet ./... && go test ./...` green (DB-gated tests skip without a DB). `make nofloat` stays green (the `security` package has no monetary arithmetic — quote currency is just a code; no `decimal`/float involved).
   - [x] Live smoke (compose db on :5433 + run server, login `owner`/`financas`): open `/securities` (via the Settings link); create `PETR4 / Petrobras PN / stock / BRL` and `VOO / Vanguard S&P 500 ETF / etf / USD`; confirm both list; try creating `petr4` again ⇒ rejected with the duplicate message and no new row; try an unsupported currency ⇒ rejected; persistence across reload.
   - [x] Update `README.md` briefly (securities: symbol/name/type/quote currency; duplicate symbols prevented case-insensitively; managed from Settings; used by investment transactions in later stories).
+
+### Review Findings
+
+Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor, all Opus) of commit `2ce68fa` — 2026-06-29. Verdict: **ACCEPT** (no High; no AC/AD violations). 2 patch, 4 defer, 3 dismissed.
+
+- [x] [Review][Patch] `TestSecuritiesPage` "ETF" assertion is vacuous — `ETF` always appears in the type `<select>`, so `Contains(b,"ETF")` is true regardless of the created row; only the `VOO` check is meaningful [internal/http/router_test.go TestSecuritiesPage] — **fixed**: now asserts the upper-cased symbol + the unique name "Vanguard 500 Index".
+- [x] [Review][Patch] Unsupported-currency test only asserts the 400 status, never confirms the row was not persisted (a handler that 400s but still inserts would pass) [internal/http/router_test.go TestSecuritiesPage] — **fixed**: re-fetches `/securities` and asserts `PETR4` is absent.
+- [x] [Review][Defer] `renderSecurities` swallows a `List` error → renders "No securities yet." with HTTP 200 on a DB outage — deferred, pre-existing project-wide convention (accounts/categories/exchange-rates all do `if x, err := …; err == nil`); fix project-wide, not in this story [internal/http/router.go renderSecurities]
+- [x] [Review][Defer] Raw wrapped DB error echoed to the client via `err.Error()` on non-23505 insert failures — deferred, pre-existing pattern (account/category create do the same) [internal/http/router.go securitiesCreate]
+- [x] [Review][Defer] No max-length / interior-whitespace / charset validation on symbol & name (`"PE TR 4"` or huge strings accepted) — deferred, matches the unbounded-`TEXT` baseline across account/category [internal/service/security/security.go Create]
+- [x] [Review][Defer] The plain `UNIQUE(symbol)` is byte-exact; case-insensitive dedup holds only because the service upper-cases before insert. Latent only if a future writer bypasses the service (AD-3 forbids that today). If a non-service write path is ever added, switch to `UNIQUE (upper(symbol))` — deferred [db/migrations/00009_securities.sql]
+
+Dismissed as noise/non-issues: unicode-homoglyph symbols surviving `ToUpper` (negligible for a single owner entering their own symbols); `GetSecurityBySymbol` generated-but-unused (the insert+23505 path is the correct race-free choice — the query is intentional scaffolding for 4.2); the diff omitting sqlc/templ-generated files (review-scope filtering, `go build` verified clean).
 
 ## Dev Notes
 
