@@ -1,0 +1,48 @@
+# Local development environment mirroring the production shape (AD-8): the
+# single app image plus a PostgreSQL 18 database. The app does not yet connect
+# to the database (that is Story 1.2) — but `docker compose up` brings up both
+# containers and /healthz answers 200.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: financas
+      POSTGRES_PASSWORD: financas
+      POSTGRES_DB: financas
+    ports:
+      # Host 5433 -> container 5432, to avoid colliding with a developer's
+      # native PostgreSQL on 5432. In-cluster the app still reaches it at db:5432.
+      - "5433:5432"
+    volumes:
+      # PostgreSQL 18+ expects a single mount at /var/lib/postgresql (it stores
+      # data in a major-version subdirectory); the older /var/lib/postgresql/data
+      # mount is rejected on first start.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financas -d financas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://financas:financas@db:5432/financas?sslmode=disable"
+      SESSION_SECRET: "dev-only-not-secret"
+      # Dev-only owner login: owner / financas. The hash is argon2id; "$" is
+      # doubled to "$$" so docker compose does not interpolate it. Regenerate
+      # with `make hashpw`. Override for any real deployment.
+      OWNER_USERNAME: "owner"
+      OWNER_PASSWORD_HASH: "$$argon2id$$v=19$$m=65536,t=1,p=12$$1Y0u+FzH3id6sQcD1d0zog$$Dja2LWikx/8zEZZK082vo2vOGQhPp1Kw5OAmbjAcoNs"
+      SECURE_COOKIES: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

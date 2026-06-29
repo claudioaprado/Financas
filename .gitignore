@@ -1,0 +1,34 @@
+# Build output
+/bin/
+/tmp/
+*.exe
+
+# Go test/coverage artifacts
+*.test
+*.out
+
+# Env / secrets — supplied via environment only (AD-8); never commit real values
+.env
+.env.local
+
+# Node (Tailwind CLI runs via npx; no project node_modules expected)
+/node_modules/
+
+# OS
+.DS_Store
+
+# Local agent tooling / framework installs (not project source; regenerable)
+/.claude/
+/.agents/
+/.omc/
+/_bmad/
+/skills-lock.json
+
+# Azure deploy — real parameter files and auth artifacts hold secrets
+deploy/azure/main.parameters.json
+*.azureauth
+
+# NOTE: generated artifacts ARE committed on purpose so `go build` and the
+# Docker image work without the codegen toolchain:
+#   - web/**/*_templ.go        (templ output)
+#   - web/static/css/app.css   (Tailwind output)

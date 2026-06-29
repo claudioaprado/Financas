@@ -1,0 +1,12 @@
+{
+  "name": "financas-web",
+  "private": true,
+  "description": "Dev-time Tailwind CSS v4 build toolchain for the Financas UI. Not part of the runtime image — the built app.css is committed and embedded into the Go binary.",
+  "scripts": {
+    "build:css": "tailwindcss -i web/static/css/input.css -o web/static/css/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.1",
+    "tailwindcss": "^4.3.1"
+  }
+}

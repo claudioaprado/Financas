@@ -1,0 +1,2 @@
+# sqlc source queries (*.sql) land here from Story 1.2 onward; sqlc generates
+# type-safe Go into internal/store.

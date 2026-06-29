@@ -1,0 +1,46 @@
+package web
+
+// DashboardPage is the authenticated landing page wrapped in the app shell. The
+// real KPI dashboard (cards, chart, allocation, insight) is Epic 5; this shows
+// a shell-framed placeholder so the shell and navigation are usable now.
+templ DashboardPage(data ShellData) {
+	@Shell(data) {
+		<section class="rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Dashboard</h1>
+			<p class="mt-1 text-muted">Your financial overview will appear here.</p>
+		</section>
+	}
+}
+
+// ComingSoon renders a shell-framed placeholder for a nav section whose real
+// page is built in a later epic.
+templ ComingSoon(data ShellData, title string) {
+	@Shell(data) {
+		<section class="rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">{ title }</h1>
+			<p class="mt-1 text-muted">Coming soon.</p>
+		</section>
+	}
+}
+
+// SettingsPage lets the owner choose the Display Currency (Story 2.1). The
+// currencies are ISO-4217 codes; data.DisplayCurrency marks the current choice.
+templ SettingsPage(data ShellData, currencies []string) {
+	@Shell(data) {
+		<section class="max-w-md rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Settings</h1>
+			<form method="post" action="/settings" class="mt-4 space-y-3">
+				<div>
+					<label class="block text-sm" for="currency">Display currency</label>
+					<select id="currency" name="currency" class="mt-1 rounded border px-2 py-1">
+						for _, c := range currencies {
+							<option value={ c } selected?={ c == data.DisplayCurrency }>{ c }</option>
+						}
+					</select>
+					<p class="mt-1 text-xs text-muted">Totals are shown in this currency. Stored amounts keep their own currency.</p>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Save</button>
+			</form>
+		</section>
+	}
+}

@@ -1,0 +1,18 @@
+# sqlc configuration (v2). Generates type-safe Go from db/query/*.sql against
+# the goose migration schema in db/migrations, emitting into internal/store
+# using the pgx/v5 driver. There are no queries yet (Story 1.2+), so codegen
+# is a no-op until then. Run via: make sqlc
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "db/query"
+    schema: "db/migrations"
+    gen:
+      go:
+        package: "store"
+        out: "internal/store"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_empty_slices: true
+        emit_json_tags: false
+        emit_prepared_queries: false

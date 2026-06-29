@@ -1,0 +1,17 @@
+# Keep the build context small and deterministic.
+.git
+.gitignore
+bin/
+tmp/
+*.md
+.env
+.env.local
+node_modules/
+# Planning / tooling artifacts not needed to build the image.
+_bmad
+_bmad-output
+design-artifacts
+docs
+.claude
+.agents
+.omc

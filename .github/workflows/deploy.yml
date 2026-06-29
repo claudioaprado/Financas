@@ -1,0 +1,57 @@
+name: Deploy to Azure
+
+# Ongoing image deploys. First-time provisioning is done once with
+# deploy/azure/deploy.sh. Requires the infra to already exist and these repo
+# settings:
+#   Secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  (OIDC federated credential)
+#   Variables: AZURE_RESOURCE_GROUP, ACR_NAME, CONTAINER_APP_NAME
+# No long-lived Azure secret is stored; app secrets live as Container App secrets.
+#
+# Codegen note: templ/Tailwind outputs (*_templ.go, app.css) are committed, so
+# the image build only compiles — CI runs no Go/Node codegen. Rebuild locally
+# with `make generate css` before pushing if you changed .templ or CSS tokens.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build/deploy (defaults to the commit SHA)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write # required for azure/login OIDC
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      CONTAINER_APP: ${{ vars.CONTAINER_APP_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, no stored secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_SHA::12}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push image (ACR Tasks builds the Dockerfile)
+        run: az acr build -r "$ACR_NAME" -t "financas:${{ steps.tag.outputs.tag }}" .
+
+      - name: Roll the Container App to the new image
+        run: |
+          LOGIN_SERVER="$(az acr show -n "$ACR_NAME" --query loginServer -o tsv)"
+          az containerapp update -g "$RG" -n "$CONTAINER_APP" \
+            --image "${LOGIN_SERVER}/financas:${{ steps.tag.outputs.tag }}"

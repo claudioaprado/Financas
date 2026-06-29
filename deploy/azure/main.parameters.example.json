@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "Copy to main.parameters.json (gitignored) and fill in. Secrets are better passed on the az command line / from env than written to a file; deploy.sh does that. Never commit real values.",
+  "parameters": {
+    "namePrefix": { "value": "financas" },
+    "acrName": { "value": "<your-acr-name-created-by-deploy.sh>" },
+    "image": { "value": "<acr-login-server>/financas:<tag>" },
+    "postgresVersion": { "value": "16" },
+    "pgAdminUser": { "value": "financas" },
+    "pgAdminPassword": { "value": "<strong-password>" },
+    "sessionSecret": { "value": "<openssl rand -base64 32>" },
+    "ownerUsername": { "value": "owner" },
+    "ownerPasswordHash": { "value": "<output of: make hashpw>" }
+  }
+}

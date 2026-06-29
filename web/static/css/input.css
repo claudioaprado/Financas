@@ -1,0 +1,20 @@
+/* Tailwind CSS v4 entrypoint (CSS-first; there is no tailwind.config.js).
+   Build with:  make css   ->   npm run build:css
+   The @theme block below is the Financas design-token system (UX-DR7). Story 5.1
+   extends it with card/badge/large-number component primitives. */
+@import "tailwindcss";
+
+@theme {
+	/* Semantic palette — green = gain/positive, red = loss/negative, one bold
+	   accent, plus light-theme surface + neutral text tones. */
+	--color-surface: oklch(0.985 0.004 250); /* app background */
+	--color-ink: oklch(0.21 0.02 255); /* primary text */
+	--color-muted: oklch(0.55 0.02 255); /* secondary text */
+	--color-accent: oklch(0.55 0.16 264); /* bold call-out accent */
+	--color-gain: oklch(0.62 0.16 150); /* positive / gain */
+	--color-loss: oklch(0.585 0.21 25); /* negative / loss */
+
+	/* Shape — ~16px rounded cards with a soft shadow. */
+	--radius-card: 1rem;
+	--shadow-card: 0 8px 24px -12px oklch(0.21 0.02 255 / 0.18);
+}
