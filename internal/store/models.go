@@ -4,6 +4,13 @@
 
 package store
 
+import (
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
+)
+
 type AppSetting struct {
 	ID              bool
 	DisplayCurrency string
@@ -12,4 +19,13 @@ type AppSetting struct {
 type Currency struct {
 	Code string
 	Name string
+}
+
+type ExchangeRate struct {
+	ID            int64
+	FromCurrency  string
+	ToCurrency    string
+	EffectiveDate time.Time
+	Rate          decimal.Decimal
+	CreatedAt     pgtype.Timestamptz
 }

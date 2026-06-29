@@ -16,3 +16,10 @@ sql:
         emit_empty_slices: true
         emit_json_tags: false
         emit_prepared_queries: false
+        # Money/quantity NUMERICs map to shopspring/decimal (AD-4, decimal end to
+        # end); DATE maps to time.Time. The pgx pool registers the decimal codec.
+        overrides:
+          - db_type: "pg_catalog.numeric"
+            go_type: "github.com/shopspring/decimal.Decimal"
+          - db_type: "date"
+            go_type: "time.Time"

@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/internal/money"
+	"github.com/claudioaprado/financas/internal/service/exchangerate"
 )
 
 type stubAuth struct{ ok bool }
@@ -44,10 +47,37 @@ func (s *stubSettings) ListCurrencies(context.Context) ([]money.Currency, error)
 	return money.Supported(), nil
 }
 
+// stubExchangeRates is an in-memory ExchangeRates for handler tests.
+type stubExchangeRates struct{ rates []exchangerate.Rate }
+
+func (s *stubExchangeRates) Add(_ context.Context, from, to money.Currency, eff time.Time, rate decimal.Decimal) (exchangerate.Rate, error) {
+	if from == to {
+		return exchangerate.Rate{}, errors.New("same currency")
+	}
+	if !money.IsSupported(from) || !money.IsSupported(to) {
+		return exchangerate.Rate{}, errors.New("unsupported")
+	}
+	if !rate.IsPositive() {
+		return exchangerate.Rate{}, errors.New("non-positive")
+	}
+	r := exchangerate.Rate{ID: int64(len(s.rates) + 1), From: from, To: to, EffectiveDate: eff, Rate: rate}
+	s.rates = append(s.rates, r)
+	return r, nil
+}
+
+func (s *stubExchangeRates) List(context.Context) ([]exchangerate.Rate, error) { return s.rates, nil }
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
-// instance has an isolated store), a stub authenticator, and a stub Settings.
+// instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
-	return Deps{Sessions: scs.New(), Auth: stubAuth{ok: authOK}, Ready: ready, Settings: &stubSettings{}, OwnerName: "TestOwner"}
+	return Deps{
+		Sessions:      scs.New(),
+		Auth:          stubAuth{ok: authOK},
+		Ready:         ready,
+		Settings:      &stubSettings{},
+		ExchangeRates: &stubExchangeRates{},
+		OwnerName:     "TestOwner",
+	}
 }
 
 func TestHealthz(t *testing.T) {
@@ -210,6 +240,54 @@ func TestSettingsShowsAndUpdates(t *testing.T) {
 	router.ServeHTTP(recHome, withCookie(httptest.NewRequest(http.MethodGet, "/", nil), cookie))
 	if !strings.Contains(recHome.Body.String(), "BRL") {
 		t.Error("shell header should show BRL after switching display currency")
+	}
+}
+
+func TestExchangeRatesRequiresAuth(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/exchange-rates", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("unauth GET /exchange-rates = %d -> %q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestExchangeRatesAddAndList(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// GET shows the add form.
+	recGet := httptest.NewRecorder()
+	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/exchange-rates", nil), cookie))
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Exchange rates") {
+		t.Fatalf("GET /exchange-rates = %d, missing heading", recGet.Code)
+	}
+
+	// POST a valid rate redirects, and it then appears in the list.
+	recAdd := httptest.NewRecorder()
+	add := httptest.NewRequest(http.MethodPost, "/exchange-rates", strings.NewReader("from=USD&to=BRL&effective_date=2024-01-01&rate=5.25"))
+	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAdd, withCookie(add, cookie))
+	if recAdd.Code != http.StatusSeeOther {
+		t.Fatalf("POST valid rate = %d, want 303", recAdd.Code)
+	}
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/exchange-rates", nil), cookie))
+	body := recList.Body.String()
+	for _, want := range []string{"USD", "BRL", "2024-01-01", "5.25"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rates list missing %q", want)
+		}
+	}
+
+	// An invalid (same-currency) rate is rejected without crashing.
+	recBad := httptest.NewRecorder()
+	bad := httptest.NewRequest(http.MethodPost, "/exchange-rates", strings.NewReader("from=USD&to=USD&effective_date=2024-01-01&rate=1"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recBad, withCookie(bad, cookie))
+	if recBad.Code != http.StatusBadRequest {
+		t.Fatalf("POST same-currency = %d, want 400", recBad.Code)
 	}
 }
 

@@ -6,11 +6,16 @@ package store
 
 import (
 	"context"
+
+	"github.com/shopspring/decimal"
 )
 
 type Querier interface {
+	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
+	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
+	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
 }
 

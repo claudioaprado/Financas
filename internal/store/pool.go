@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 
+	pgxdecimal "github.com/jackc/pgx-shopspring-decimal"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver for goose
 	"github.com/pressly/goose/v3"
@@ -13,9 +15,20 @@ import (
 
 // NewPool creates a pgx connection pool from a PostgreSQL URL and verifies
 // connectivity with a ping, failing fast on a bad URL or unreachable server.
-// The caller owns the pool and must Close it.
+// Each connection registers the shopspring/decimal codec so NUMERIC columns
+// scan/encode as decimal.Decimal (AD-4 — decimal money end to end). The caller
+// owns the pool and must Close it.
 func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("store: parse config: %w", err)
+	}
+	cfg.AfterConnect = func(_ context.Context, conn *pgx.Conn) error {
+		pgxdecimal.Register(conn.TypeMap())
+		return nil
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("store: create pool: %w", err)
 	}

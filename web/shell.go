@@ -7,6 +7,14 @@ type ShellData struct {
 	DisplayCurrency string // ISO-4217 code shown in the header (Story 2.1)
 }
 
+// RateRow is one exchange-rate row formatted for display.
+type RateRow struct {
+	From          string
+	To            string
+	EffectiveDate string
+	Rate          string
+}
+
 // NavItem is one top-navigation entry.
 type NavItem struct {
 	Label string

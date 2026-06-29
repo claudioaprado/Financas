@@ -19,6 +19,7 @@ import (
 	"github.com/claudioaprado/financas/internal/config"
 	apphttp "github.com/claudioaprado/financas/internal/http"
 	"github.com/claudioaprado/financas/internal/service/auth"
+	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/store"
 )
@@ -61,13 +62,14 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr: ":" + cfg.Port,
 		Handler: apphttp.NewRouter(apphttp.Deps{
-			Sessions:  sessions,
-			Auth:      authn,
-			Ready:     pool.Ping,
-			Settings:  settings.New(pool),
-			OwnerName: cfg.OwnerUsername,
+			Sessions:      sessions,
+			Auth:          authn,
+			Ready:         pool.Ping,
+			Settings:      settings.New(pool),
+			ExchangeRates: exchangerate.New(pool),
+			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

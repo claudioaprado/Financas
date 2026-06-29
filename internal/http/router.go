@@ -15,8 +15,10 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/internal/money"
+	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/web"
 )
 
@@ -38,13 +40,21 @@ type Settings interface {
 	ListCurrencies(ctx context.Context) ([]money.Currency, error)
 }
 
+// ExchangeRates appends and lists owner-entered exchange rates. Defined here
+// (consumer side) and implemented by service/exchangerate.
+type ExchangeRates interface {
+	Add(ctx context.Context, from, to money.Currency, effective time.Time, rate decimal.Decimal) (exchangerate.Rate, error)
+	List(ctx context.Context) ([]exchangerate.Rate, error)
+}
+
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
-	Sessions  *scs.SessionManager
-	Auth      Authenticator
-	Ready     ReadyCheck
-	Settings  Settings
-	OwnerName string // shown in the shell greeting (from config)
+	Sessions      *scs.SessionManager
+	Auth          Authenticator
+	Ready         ReadyCheck
+	Settings      Settings
+	ExchangeRates ExchangeRates
+	OwnerName     string // shown in the shell greeting (from config)
 }
 
 // sessionAuthKey marks an authenticated session.
@@ -97,9 +107,60 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
+		pr.Get("/exchange-rates", exchangeRatesForm(deps))
+		pr.Post("/exchange-rates", exchangeRatesSubmit(deps))
 	})
 
 	return r
+}
+
+func exchangeRatesForm(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderExchangeRates(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		from := money.Currency(req.PostFormValue("from"))
+		to := money.Currency(req.PostFormValue("to"))
+		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
+		rate, rErr := decimal.NewFromString(req.PostFormValue("rate"))
+		if dErr != nil || rErr != nil {
+			renderExchangeRates(deps, w, req, "Enter a valid date and a decimal rate.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.ExchangeRates.Add(req.Context(), from, to, effective, rate); err != nil {
+			renderExchangeRates(deps, w, req, "Could not add rate: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/exchange-rates", http.StatusSeeOther)
+	}
+}
+
+func renderExchangeRates(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var rows []web.RateRow
+	if rs, err := deps.ExchangeRates.List(req.Context()); err == nil {
+		for _, r := range rs {
+			rows = append(rows, web.RateRow{
+				From:          string(r.From),
+				To:            string(r.To),
+				EffectiveDate: r.EffectiveDate.Format("2006-01-02"),
+				Rate:          r.Rate.String(),
+			})
+		}
+	}
+	var codes []string
+	for _, c := range money.Supported() {
+		codes = append(codes, string(c))
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.ExchangeRatesPage(shellData(deps, req.Context(), "settings"), rows, codes, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display
