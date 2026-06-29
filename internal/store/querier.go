@@ -29,7 +29,10 @@ type Querier interface {
 	GetDisplayCurrency(ctx context.Context) (string, error)
 	GetSecurity(ctx context.Context, id int64) (Security, error)
 	GetSecurityBySymbol(ctx context.Context, symbol string) (Security, error)
-	LatestPrices(ctx context.Context, effectiveDate time.Time) ([]LatestPricesRow, error)
+	// $1 is cast to a calendar DATE so "effective on or before today" is a stable
+	// date-to-date comparison (no sub-day/timezone boundary flapping when an instant
+	// is passed).
+	LatestPrices(ctx context.Context, dollar_1 time.Time) ([]LatestPricesRow, error)
 	ListAccountImportHashes(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error)
 	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)

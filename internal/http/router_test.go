@@ -509,7 +509,7 @@ func (s *stubPrices) Add(_ context.Context, securityID int64, effective time.Tim
 		return price.Price{}, price.ErrNonPositivePrice
 	}
 	s.nextID++
-	row := price.Price{ID: s.nextID, SecurityID: securityID, Symbol: fmt.Sprintf("S%d", securityID), EffectiveDate: effective, Price: p}
+	row := price.Price{ID: s.nextID, SecurityID: securityID, Symbol: fmt.Sprintf("S%d", securityID), Currency: money.BRL, EffectiveDate: effective, Price: p}
 	s.prices = append(s.prices, row)
 	return row, nil
 }
@@ -1194,7 +1194,7 @@ func TestPricesAddAndList(t *testing.T) {
 	recList := httptest.NewRecorder()
 	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/prices", nil), cookie))
 	body := recList.Body.String()
-	for _, want := range []string{"2024-06-01", "16"} {
+	for _, want := range []string{"2024-06-01", "16.0000 BRL"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("prices list missing %q", want)
 		}
@@ -1252,9 +1252,13 @@ func TestHoldingValuationColumns(t *testing.T) {
 	post("/accounts", "name=Broker&type=investment&currency=USD", http.StatusSeeOther)
 	post("/accounts/1/buy", "security_id=1&quantity=100&price=10&fees=5&date=2026-06-01", http.StatusSeeOther)
 
-	// No price yet → the price-dependent cells render "—".
-	if b := get("/accounts/1"); !strings.Contains(b, "—") {
-		t.Errorf("holding with no price should render an em dash placeholder")
+	// No price yet → the price-dependent cells render the muted "—" placeholder
+	// (assert the specific cell markup, not just any em dash on the page).
+	if b := get("/accounts/1"); !strings.Contains(b, `text-muted">—`) {
+		t.Errorf("holding with no price should render muted em-dash cells")
+	}
+	if b := get("/accounts/1"); strings.Contains(b, "1600.0000") {
+		t.Errorf("no market value should be shown before a price exists")
 	}
 
 	// Set a price on the held position, then it re-values on read: market value

@@ -1494,7 +1494,7 @@ func InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, c
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						var templ_7745c5c3_Var77 = []any{"text-right", templ.KV("text-gain", !h.UnrealizedNegative), templ.KV("text-loss", h.UnrealizedNegative)}
+						var templ_7745c5c3_Var77 = []any{"text-right", templ.KV("text-gain", h.UnrealizedPositive), templ.KV("text-loss", h.UnrealizedNegative)}
 						templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var77...)
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
@@ -1519,7 +1519,7 @@ func InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, c
 						var templ_7745c5c3_Var79 string
 						templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(h.UnrealizedGain)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/pages.templ`, Line: 367, Col: 145}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/pages.templ`, Line: 367, Col: 144}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 						if templ_7745c5c3_Err != nil {

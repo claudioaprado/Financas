@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -37,6 +38,7 @@ type Price struct {
 	ID            int64
 	SecurityID    int64
 	Symbol        string
+	Currency      money.Currency // the security's quote currency (prices are native, AD-5)
 	EffectiveDate time.Time
 	Price         decimal.Decimal
 	CreatedAt     time.Time
@@ -62,6 +64,12 @@ func New(pool *pgxpool.Pool) *Service {
 // Add appends a new effective-dated price after validating that the security
 // exists and the price is positive. It writes inside one transaction (AD-3).
 func (s *Service) Add(ctx context.Context, securityID int64, effective time.Time, price decimal.Decimal) (Price, error) {
+	// Round to the money scale once at the entry boundary (banker's), so storage
+	// matches the valuation rounding convention (AD-4/AD-12) and Postgres never
+	// silently re-rounds the NUMERIC(19,4) column half-away-from-zero. A sub-scale
+	// input that rounds to zero is then rejected with the typed error rather than
+	// surfacing a raw CHECK (price > 0) violation.
+	price = price.RoundBank(money.MoneyScale)
 	if !price.IsPositive() {
 		return Price{}, ErrNonPositivePrice
 	}
@@ -95,6 +103,7 @@ func (s *Service) Add(ctx context.Context, securityID int64, effective time.Time
 		ID:            row.ID,
 		SecurityID:    row.SecurityID,
 		Symbol:        sec.Symbol,
+		Currency:      money.Currency(sec.QuoteCurrency),
 		EffectiveDate: row.EffectiveDate,
 		Price:         row.Price,
 		CreatedAt:     row.CreatedAt.Time,
@@ -145,6 +154,7 @@ func (s *Service) List(ctx context.Context) ([]Price, error) {
 			ID:            r.ID,
 			SecurityID:    r.SecurityID,
 			Symbol:        r.Symbol,
+			Currency:      money.Currency(r.QuoteCurrency),
 			EffectiveDate: r.EffectiveDate,
 			Price:         r.Price,
 			CreatedAt:     r.CreatedAt.Time,

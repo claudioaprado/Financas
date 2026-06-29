@@ -105,6 +105,16 @@ func TestPrice(t *testing.T) {
 	if _, err := svc.Add(ctx, sec.ID, d(t, "2024-01-01"), decimal.RequireFromString("0")); !errors.Is(err, ErrNonPositivePrice) {
 		t.Errorf("non-positive add = %v; want ErrNonPositivePrice", err)
 	}
+	// A price with >4 dp is rounded to the money scale (banker's) at ingest, so the
+	// stored value is exact (no silent half-away-from-zero re-rounding by NUMERIC).
+	if got, err := svc.Add(ctx, sec.ID, d(t, "2024-02-01"), decimal.RequireFromString("16.99995")); err != nil || !got.Price.Equal(decimal.RequireFromString("17")) {
+		t.Errorf("over-precise add = %v, %v; want price 17 (banker's round to 4dp)", got.Price, err)
+	}
+	// A positive price below half a cent rounds to zero → typed error, not a raw
+	// CHECK (price > 0) violation echoed from Postgres.
+	if _, err := svc.Add(ctx, sec.ID, d(t, "2024-02-01"), decimal.RequireFromString("0.00004")); !errors.Is(err, ErrNonPositivePrice) {
+		t.Errorf("sub-cent add = %v; want ErrNonPositivePrice (rounds to 0)", err)
+	}
 	if _, err := svc.Add(ctx, 999_999_999, d(t, "2024-01-01"), decimal.RequireFromString("1")); !errors.Is(err, ErrSecurityNotFound) {
 		t.Errorf("missing-security add = %v; want ErrSecurityNotFound", err)
 	}

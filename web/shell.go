@@ -74,7 +74,8 @@ type HoldingRow struct {
 	PriceDate          string // effective date of that price, e.g. "2024-06-01"
 	MarketValue        string // quantity × price (native)
 	UnrealizedGain     string // market value − cost basis (native)
-	UnrealizedNegative bool   // drives red styling when the unrealized G/L is a loss
+	UnrealizedPositive bool   // drives green styling when the unrealized G/L is a gain
+	UnrealizedNegative bool   // drives red styling when the unrealized G/L is a loss (zero = neither, neutral)
 }
 
 // PriceRow is one effective-dated security price on the prices page (Story 4.3),

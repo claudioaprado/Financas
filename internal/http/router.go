@@ -295,7 +295,7 @@ func renderPrices(deps Deps, w http.ResponseWriter, req *http.Request, errMsg st
 			rows = append(rows, web.PriceRow{
 				Symbol:        p.Symbol,
 				EffectiveDate: p.EffectiveDate.Format("2006-01-02"),
-				Price:         p.Price.String(),
+				Price:         money.New(p.Price, p.Currency).String(),
 			})
 		}
 	}
@@ -1089,6 +1089,7 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 				row.PriceDate = h.PriceDate.Format("2006-01-02")
 				row.MarketValue = h.MarketValue.String()
 				row.UnrealizedGain = h.UnrealizedGain.String()
+				row.UnrealizedPositive = h.UnrealizedGain.Amount().IsPositive()
 				row.UnrealizedNegative = h.UnrealizedGain.Amount().IsNegative()
 			}
 			holdings = append(holdings, row)

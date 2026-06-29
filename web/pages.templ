@@ -364,7 +364,7 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 								if h.HasPrice {
 									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">as of { h.PriceDate }</span></td>
 									<td class="text-right">{ h.MarketValue }</td>
-									<td class={ "text-right", templ.KV("text-gain", !h.UnrealizedNegative), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
+									<td class={ "text-right", templ.KV("text-gain", h.UnrealizedPositive), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
 								} else {
 									<td class="text-right text-muted">—</td>
 									<td class="text-right text-muted">—</td>

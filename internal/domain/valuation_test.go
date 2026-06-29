@@ -49,6 +49,26 @@ func TestValueHolding(t *testing.T) {
 	}
 }
 
+// TestValueHoldingSubCentBasisIsNeutral proves a holding whose cost basis carries
+// sub-money-scale crumbs (fractional shares, full-precision DeriveHoldings basis)
+// valued at its own average price rounds to an exact-zero, non-negative unrealized
+// G/L — not a phantom sub-cent loss that would paint the row red.
+func TestValueHoldingSubCentBasisIsNeutral(t *testing.T) {
+	// 0.333333 shares with cost basis 0.333333 (full precision), priced at 1.00:
+	// market = round(0.333333) = 0.3333; unrealized = round(0.3333 − 0.333333) = 0.0000.
+	h := holdingFor("0.333333", "0.333333")
+	market, unrealized := ValueHolding(h, dec("1.00"))
+	if got := market.String(); got != "0.3333 BRL" {
+		t.Errorf("market value = %s, want 0.3333 BRL", got)
+	}
+	if got := unrealized.String(); got != "0.0000 BRL" {
+		t.Errorf("unrealized = %s, want 0.0000 BRL", got)
+	}
+	if unrealized.Amount().IsNegative() {
+		t.Errorf("break-even holding must not be negative (would paint loss-red), got %s", unrealized.Amount())
+	}
+}
+
 // TestValueHoldingRoundsHalfEven proves banker's rounding at the display boundary:
 // 1.5 × 0.00005 = 0.000075 rounds to 0.0001 is wrong for half-even at 4dp; use a
 // value whose 5th digit is exactly 5 with an even/odd 4th digit to lock the mode.

@@ -41,7 +41,7 @@ func (q *Queries) AddPrice(ctx context.Context, arg AddPriceParams) (Price, erro
 const latestPrices = `-- name: LatestPrices :many
 SELECT DISTINCT ON (security_id) security_id, effective_date, price
 FROM price
-WHERE effective_date <= $1
+WHERE effective_date <= $1::date
 ORDER BY security_id, effective_date DESC, id DESC
 `
 
@@ -51,8 +51,11 @@ type LatestPricesRow struct {
 	Price         decimal.Decimal
 }
 
-func (q *Queries) LatestPrices(ctx context.Context, effectiveDate time.Time) ([]LatestPricesRow, error) {
-	rows, err := q.db.Query(ctx, latestPrices, effectiveDate)
+// $1 is cast to a calendar DATE so "effective on or before today" is a stable
+// date-to-date comparison (no sub-day/timezone boundary flapping when an instant
+// is passed).
+func (q *Queries) LatestPrices(ctx context.Context, dollar_1 time.Time) ([]LatestPricesRow, error) {
+	rows, err := q.db.Query(ctx, latestPrices, dollar_1)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +75,7 @@ func (q *Queries) LatestPrices(ctx context.Context, effectiveDate time.Time) ([]
 }
 
 const listPrices = `-- name: ListPrices :many
-SELECT p.id, p.security_id, s.symbol, p.effective_date, p.price, p.created_at
+SELECT p.id, p.security_id, s.symbol, s.quote_currency, p.effective_date, p.price, p.created_at
 FROM price p
 JOIN security s ON s.id = p.security_id
 ORDER BY p.effective_date DESC, p.id DESC
@@ -82,6 +85,7 @@ type ListPricesRow struct {
 	ID            int64
 	SecurityID    int64
 	Symbol        string
+	QuoteCurrency string
 	EffectiveDate time.Time
 	Price         decimal.Decimal
 	CreatedAt     pgtype.Timestamptz
@@ -100,6 +104,7 @@ func (q *Queries) ListPrices(ctx context.Context) ([]ListPricesRow, error) {
 			&i.ID,
 			&i.SecurityID,
 			&i.Symbol,
+			&i.QuoteCurrency,
 			&i.EffectiveDate,
 			&i.Price,
 			&i.CreatedAt,

@@ -16,11 +16,13 @@ import (
 // happens once, at this display boundary (banker's rounding via money.New/Rounded).
 //
 // The caller decides whether a price exists at all; ValueHolding is only called
-// when one does. CostBasis is already at money scale, so unrealized gain is the
-// exact difference of the (rounded) market value and the cost basis.
+// when one does. CostBasis may carry sub-money-scale precision (DeriveHoldings
+// accumulates quantity×price + fees at full precision), so the unrealized gain is
+// rounded once to the money scale too — keeping its sign and value consistent
+// with what is displayed (a true break-even holding never shows a sub-cent loss).
 func ValueHolding(h Holding, price decimal.Decimal) (marketValue, unrealizedGain money.Money) {
 	cur := h.CostBasis.Currency()
 	marketValue = money.New(h.Quantity.Mul(price), cur).Rounded()
-	unrealizedGain = money.New(marketValue.Amount().Sub(h.CostBasis.Amount()), cur)
+	unrealizedGain = money.New(marketValue.Amount().Sub(h.CostBasis.Amount()), cur).Rounded()
 	return marketValue, unrealizedGain
 }
