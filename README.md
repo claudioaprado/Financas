@@ -183,8 +183,18 @@ average cost, cost basis, realized G/L) are **derived on read** from the ledger 
 never stored, never edited directly; selling the whole position wipes the basis
 exactly, and an oversell is rejected. A security can only be traded in an account
 of the **same currency** (no FX inside a trade). Trades are corrected via delete +
-re-add (no in-place edit). Market value / unrealized gain arrive with prices
-(Story 4.3) and the portfolio dashboard (4.4).
+re-add (no in-place edit).
+
+**Security prices** (`/prices`, linked from Settings) are owner-entered,
+effective-dated, and **append-only** — corrections are new effective-dated rows,
+mirroring exchange rates. The most recent price on or before today values your
+holdings; there is **no online or automated price feed** (AD-6). With a price in
+place, each holding on its investment account's detail page shows its **market
+value** (`quantity × price`), **unrealized gain/loss** (market value − cost basis),
+and the price used with its effective date (so staleness is visible); a holding
+with no price shows "—". All of these are in the holding's own native currency
+(same-currency-only means no FX here) — the Display-Currency portfolio total and
+**Net Worth** arrive with Story 4.4.
 
 **The register** (`/transactions`) lists every account's transactions
 newest-first, with signed colored amounts (green income / red expense; transfers

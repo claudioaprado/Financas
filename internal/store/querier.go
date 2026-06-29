@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
@@ -13,6 +14,7 @@ import (
 
 type Querier interface {
 	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
+	AddPrice(ctx context.Context, arg AddPriceParams) (Price, error)
 	CategoryUsageCounts(ctx context.Context) ([]CategoryUsageCountsRow, error)
 	ClearCategoryFromTransactions(ctx context.Context, categoryID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
@@ -27,6 +29,7 @@ type Querier interface {
 	GetDisplayCurrency(ctx context.Context) (string, error)
 	GetSecurity(ctx context.Context, id int64) (Security, error)
 	GetSecurityBySymbol(ctx context.Context, symbol string) (Security, error)
+	LatestPrices(ctx context.Context, effectiveDate time.Time) ([]LatestPricesRow, error)
 	ListAccountImportHashes(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error)
 	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)
@@ -35,8 +38,10 @@ type Querier interface {
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
+	ListPrices(ctx context.Context) ([]ListPricesRow, error)
 	ListSecurities(ctx context.Context) ([]Security, error)
 	ListTransactions(ctx context.Context) ([]Transaction, error)
+	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)

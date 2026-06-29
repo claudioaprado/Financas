@@ -226,3 +226,86 @@ func TestBackdatedSellRejected(t *testing.T) {
 		t.Errorf("holding missing — the rejected sell may have persisted and bricked derivation")
 	}
 }
+
+// TestHoldingValuation proves market value / unrealized G/L are derived on read
+// (Story 4.3): a holding has no market value until a price row exists, then
+// re-values purely because the price was appended — nothing is stored/recomputed.
+func TestHoldingValuation(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	date := d(t, "2026-06-01")
+
+	inv, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create investment account: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("VAL%d", run), "Valuation Co", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create security: %v", err)
+	}
+	// Buy 100 @ 10.00 fee 5.00 → qty 100, basis 1005.00.
+	if _, err := svc.Buy(ctx, inv.ID, sec.ID, req("100"), req("10.00"), req("5.00"), date, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+
+	findHolding := func(label string) HoldingView {
+		t.Helper()
+		views, _, err := svc.Holdings(ctx, inv.ID)
+		if err != nil {
+			t.Fatalf("%s holdings: %v", label, err)
+		}
+		for _, v := range views {
+			if v.SecurityID == sec.ID {
+				return v
+			}
+		}
+		t.Fatalf("%s: holding for security %d not found", label, sec.ID)
+		return HoldingView{}
+	}
+
+	// No price yet → HasPrice false (the page renders "—").
+	if v := findHolding("pre-price"); v.HasPrice {
+		t.Errorf("pre-price: HasPrice = true, want false (no price exists)")
+	}
+
+	// Append a price effective on or before today.
+	if _, err := store.New(pool).AddPrice(ctx, store.AddPriceParams{
+		SecurityID:    sec.ID,
+		EffectiveDate: date,
+		Price:         req("16.00"),
+	}); err != nil {
+		t.Fatalf("add price: %v", err)
+	}
+
+	// Now the same holding re-values on read: market 100×16 = 1600, unrealized
+	// 1600 − 1005 = 595, price date = the effective date entered.
+	v := findHolding("post-price")
+	if !v.HasPrice {
+		t.Fatalf("post-price: HasPrice = false, want true")
+	}
+	if got := v.MarketValue.String(); got != "1600.0000 BRL" {
+		t.Errorf("market value = %s, want 1600.0000 BRL", got)
+	}
+	if got := v.UnrealizedGain.String(); got != "595.0000 BRL" {
+		t.Errorf("unrealized gain = %s, want 595.0000 BRL", got)
+	}
+	if got := v.Price.String(); got != "16.0000 BRL" {
+		t.Errorf("price = %s, want 16.0000 BRL", got)
+	}
+	if !v.PriceDate.Equal(date) {
+		t.Errorf("price date = %v, want %v", v.PriceDate, date)
+	}
+}

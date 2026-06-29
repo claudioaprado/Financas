@@ -27,6 +27,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
+	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/web"
@@ -55,6 +56,13 @@ type Settings interface {
 type ExchangeRates interface {
 	Add(ctx context.Context, from, to money.Currency, effective time.Time, rate decimal.Decimal) (exchangerate.Rate, error)
 	List(ctx context.Context) ([]exchangerate.Rate, error)
+}
+
+// Prices appends and lists owner-entered, effective-dated security prices.
+// Defined here (consumer side) and implemented by service/price.
+type Prices interface {
+	Add(ctx context.Context, securityID int64, effective time.Time, price decimal.Decimal) (price.Price, error)
+	List(ctx context.Context) ([]price.Price, error)
 }
 
 // Accounts creates, lists, renames, and archives the owner's accounts. Defined
@@ -116,6 +124,7 @@ type Deps struct {
 	Ready         ReadyCheck
 	Settings      Settings
 	ExchangeRates ExchangeRates
+	Prices        Prices
 	Accounts      Accounts
 	Transactions  Transactions
 	Categories    Categories
@@ -196,6 +205,8 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/settings", settingsSubmit(deps))
 		pr.Get("/exchange-rates", exchangeRatesForm(deps))
 		pr.Post("/exchange-rates", exchangeRatesSubmit(deps))
+		pr.Get("/prices", pricesForm(deps))
+		pr.Post("/prices", pricesSubmit(deps))
 	})
 
 	return r
@@ -248,6 +259,57 @@ func renderExchangeRates(deps Deps, w http.ResponseWriter, req *http.Request, er
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.ExchangeRatesPage(shellData(deps, req.Context(), "settings"), rows, codes, errMsg).Render(req.Context(), w)
+}
+
+func pricesForm(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderPrices(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func pricesSubmit(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		securityID, idErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
+		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
+		price, pErr := decimal.NewFromString(req.PostFormValue("price"))
+		if idErr != nil || dErr != nil || pErr != nil {
+			renderPrices(deps, w, req, "Choose a security and enter a valid date and a decimal price.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Prices.Add(req.Context(), securityID, effective, price); err != nil {
+			renderPrices(deps, w, req, "Could not add price: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/prices", http.StatusSeeOther)
+	}
+}
+
+func renderPrices(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var rows []web.PriceRow
+	if ps, err := deps.Prices.List(req.Context()); err == nil {
+		for _, p := range ps {
+			rows = append(rows, web.PriceRow{
+				Symbol:        p.Symbol,
+				EffectiveDate: p.EffectiveDate.Format("2006-01-02"),
+				Price:         p.Price.String(),
+			})
+		}
+	}
+	// A price applies to any security — the select is NOT currency-filtered (unlike
+	// the trade form). All securities are offered.
+	var securities []web.SecurityChoice
+	if secs, err := deps.Securities.List(req.Context()); err == nil {
+		for _, s := range secs {
+			securities = append(securities, web.SecurityChoice{ID: s.ID, Symbol: s.Symbol})
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.PricesPage(shellData(deps, req.Context(), "settings"), rows, securities, errMsg).Render(req.Context(), w)
 }
 
 func accountsForm(deps Deps) http.HandlerFunc {
@@ -1013,14 +1075,23 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 		oversold = errors.Is(hErr, transaction.ErrOversold)
 	} else {
 		for _, h := range hs {
-			holdings = append(holdings, web.HoldingRow{
+			row := web.HoldingRow{
 				Symbol:       h.Symbol,
 				Name:         h.Name,
 				Quantity:     h.Quantity.String(),
 				AvgCost:      h.AvgCost.String(),
 				CostBasis:    h.CostBasis.String(),
 				RealizedGain: h.RealizedGain.String(),
-			})
+				HasPrice:     h.HasPrice,
+			}
+			if h.HasPrice {
+				row.Price = h.Price.String()
+				row.PriceDate = h.PriceDate.Format("2006-01-02")
+				row.MarketValue = h.MarketValue.String()
+				row.UnrealizedGain = h.UnrealizedGain.String()
+				row.UnrealizedNegative = h.UnrealizedGain.Amount().IsNegative()
+			}
+			holdings = append(holdings, row)
 		}
 		realized = rg.String()
 	}

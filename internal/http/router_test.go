@@ -19,6 +19,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
+	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 )
@@ -152,6 +153,7 @@ type stubTransactions struct {
 
 type stubHolding struct {
 	qty, basis, realized decimal.Decimal
+	price                decimal.Decimal // zero = no price (renders "—")
 }
 
 func (s *stubTransactions) hold(securityID int64) *stubHolding {
@@ -220,14 +222,23 @@ func (s *stubTransactions) Holdings(_ context.Context, _ int64) ([]transaction.H
 		if !h.qty.IsPositive() {
 			continue
 		}
-		out = append(out, transaction.HoldingView{
+		view := transaction.HoldingView{
 			SecurityID:   id,
 			Symbol:       fmt.Sprintf("S%d", id),
 			Quantity:     h.qty,
 			AvgCost:      money.New(h.basis.Div(h.qty), money.USD).Rounded(),
 			CostBasis:    money.New(h.basis, money.USD),
 			RealizedGain: money.New(h.realized, money.USD),
-		})
+		}
+		if h.price.IsPositive() {
+			market := money.New(h.qty.Mul(h.price), money.USD).Rounded()
+			view.HasPrice = true
+			view.Price = money.New(h.price, money.USD).Rounded()
+			view.PriceDate = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+			view.MarketValue = market
+			view.UnrealizedGain = money.New(market.Amount().Sub(h.basis), money.USD)
+		}
+		out = append(out, view)
 	}
 	return out, money.New(realized, money.USD), nil
 }
@@ -486,6 +497,25 @@ func (s *stubSecurities) Create(_ context.Context, symbol, name string, typ secu
 
 func (s *stubSecurities) List(_ context.Context) ([]security.Security, error) { return s.secs, nil }
 
+// stubPrices is an in-memory Prices for handler tests. It rejects non-positive
+// prices, mirroring the real service.
+type stubPrices struct {
+	prices []price.Price
+	nextID int64
+}
+
+func (s *stubPrices) Add(_ context.Context, securityID int64, effective time.Time, p decimal.Decimal) (price.Price, error) {
+	if !p.IsPositive() {
+		return price.Price{}, price.ErrNonPositivePrice
+	}
+	s.nextID++
+	row := price.Price{ID: s.nextID, SecurityID: securityID, Symbol: fmt.Sprintf("S%d", securityID), EffectiveDate: effective, Price: p}
+	s.prices = append(s.prices, row)
+	return row, nil
+}
+
+func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.prices, nil }
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -495,6 +525,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Ready:         ready,
 		Settings:      &stubSettings{},
 		ExchangeRates: &stubExchangeRates{},
+		Prices:        &stubPrices{},
 		Accounts:      &stubAccounts{},
 		Transactions:  &stubTransactions{},
 		Categories:    &stubCategories{usage: map[int64]int64{}},
@@ -1122,6 +1153,122 @@ func TestInvestmentAccountDetail(t *testing.T) {
 	post("/accounts/1/dividend", "security_id=1&amount=12.50&date=2026-06-04", http.StatusSeeOther)
 	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
 		t.Errorf("holding should remain after dividend")
+	}
+}
+
+func TestPricesRequiresAuth(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/prices", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("unauth GET /prices = %d -> %q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestPricesAddAndList(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Seed a security so the add form renders (it is hidden when none exist).
+	recSec := httptest.NewRecorder()
+	sec := httptest.NewRequest(http.MethodPost, "/securities", strings.NewReader("symbol=petr4&name=Petrobras&type=stock&quote_currency=BRL"))
+	sec.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recSec, withCookie(sec, cookie))
+
+	// GET shows the prices page + the add form.
+	recGet := httptest.NewRecorder()
+	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/prices", nil), cookie))
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Security prices") {
+		t.Fatalf("GET /prices = %d, missing heading", recGet.Code)
+	}
+
+	// POST a valid price redirects, and it then appears in the list.
+	recAdd := httptest.NewRecorder()
+	add := httptest.NewRequest(http.MethodPost, "/prices", strings.NewReader("security_id=1&effective_date=2024-06-01&price=16.00"))
+	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAdd, withCookie(add, cookie))
+	if recAdd.Code != http.StatusSeeOther {
+		t.Fatalf("POST valid price = %d, want 303", recAdd.Code)
+	}
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/prices", nil), cookie))
+	body := recList.Body.String()
+	for _, want := range []string{"2024-06-01", "16"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("prices list missing %q", want)
+		}
+	}
+
+	// A non-positive price is rejected without crashing.
+	recBad := httptest.NewRecorder()
+	bad := httptest.NewRequest(http.MethodPost, "/prices", strings.NewReader("security_id=1&effective_date=2024-06-01&price=0"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recBad, withCookie(bad, cookie))
+	if recBad.Code != http.StatusBadRequest {
+		t.Fatalf("POST non-positive price = %d, want 400", recBad.Code)
+	}
+}
+
+// TestHoldingValuationColumns proves the investment-detail holdings table shows
+// market value + unrealized G/L once a price exists, and "—" when it does not.
+func TestHoldingValuationColumns(t *testing.T) {
+	txs := &stubTransactions{}
+	deps := Deps{
+		Sessions:      scs.New(),
+		Auth:          stubAuth{ok: true},
+		Settings:      &stubSettings{},
+		ExchangeRates: &stubExchangeRates{},
+		Prices:        &stubPrices{},
+		Accounts:      &stubAccounts{},
+		Transactions:  txs,
+		Categories:    &stubCategories{usage: map[int64]int64{}},
+		Securities:    &stubSecurities{},
+		Imports:       &stubImports{},
+		OwnerName:     "TestOwner",
+	}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	get := func(path string) string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+		return rec.Body.String()
+	}
+
+	// Investment account (id 1), buy 100 @ 10 fee 5 → qty 100, basis 1005.
+	post("/accounts", "name=Broker&type=investment&currency=USD", http.StatusSeeOther)
+	post("/accounts/1/buy", "security_id=1&quantity=100&price=10&fees=5&date=2026-06-01", http.StatusSeeOther)
+
+	// No price yet → the price-dependent cells render "—".
+	if b := get("/accounts/1"); !strings.Contains(b, "—") {
+		t.Errorf("holding with no price should render an em dash placeholder")
+	}
+
+	// Set a price on the held position, then it re-values on read: market value
+	// 100×16 = 1600, unrealized 1600 − 1005 = 595.
+	txs.hold(1).price = decimal.RequireFromString("16")
+	b := get("/accounts/1")
+	if !strings.Contains(b, "1600.0000 USD") {
+		t.Errorf("market value 1600.0000 USD missing after price set")
+	}
+	if !strings.Contains(b, "595.0000 USD") {
+		t.Errorf("unrealized gain 595.0000 USD missing after price set")
+	}
+	if !strings.Contains(b, "as of 2026-06-01") {
+		t.Errorf("price effective date (staleness) missing")
 	}
 }
 

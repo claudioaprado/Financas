@@ -44,6 +44,7 @@ templ SettingsPage(data ShellData, currencies []string) {
 			<p class="mt-4 text-sm"><a href="/exchange-rates" class="text-accent hover:underline">Manage exchange rates →</a></p>
 			<p class="mt-1 text-sm"><a href="/categories" class="text-accent hover:underline">Manage categories →</a></p>
 			<p class="mt-1 text-sm"><a href="/securities" class="text-accent hover:underline">Manage securities →</a></p>
+			<p class="mt-1 text-sm"><a href="/prices" class="text-accent hover:underline">Manage prices →</a></p>
 		</section>
 	}
 }
@@ -344,12 +345,15 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 							<th class="text-right">Quantity</th>
 							<th class="text-right">Avg cost</th>
 							<th class="text-right">Cost basis</th>
+							<th class="text-right">Price</th>
+							<th class="text-right">Market value</th>
+							<th class="text-right">Unrealized G/L</th>
 							<th class="text-right">Realized G/L</th>
 						</tr>
 					</thead>
 					<tbody>
 						if len(holdings) == 0 {
-							<tr><td colspan="5" class="py-2 text-muted">No open positions.</td></tr>
+							<tr><td colspan="8" class="py-2 text-muted">No open positions.</td></tr>
 						}
 						for _, h := range holdings {
 							<tr class="border-t border-black/5">
@@ -357,6 +361,15 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 								<td class="text-right">{ h.Quantity }</td>
 								<td class="text-right">{ h.AvgCost }</td>
 								<td class="text-right">{ h.CostBasis }</td>
+								if h.HasPrice {
+									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">as of { h.PriceDate }</span></td>
+									<td class="text-right">{ h.MarketValue }</td>
+									<td class={ "text-right", templ.KV("text-gain", !h.UnrealizedNegative), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
+								} else {
+									<td class="text-right text-muted">—</td>
+									<td class="text-right text-muted">—</td>
+									<td class="text-right text-muted">—</td>
+								}
 								<td class="text-right">{ h.RealizedGain }</td>
 							</tr>
 						}
@@ -865,6 +878,65 @@ templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, er
 							<td>{ r.To }</td>
 							<td>{ r.EffectiveDate }</td>
 							<td class="text-right">{ r.Rate }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// PricesPage lets the owner enter effective-dated security prices (Story 4.3).
+// Prices are owner-entered, append-only, and never fetched online (AD-6); the
+// most recent price on or before today is used to value holdings.
+templ PricesPage(data ShellData, prices []PriceRow, securities []SecurityChoice, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Security prices</h1>
+			<p class="mt-1 text-sm text-muted">Owner-entered, effective-dated, append-only. The most recent price on or before today values your holdings. There is no online or automated price feed — enter prices yourself.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			if len(securities) == 0 {
+				<p class="mt-4 text-sm text-muted">Add a security under <a href="/securities" class="text-accent hover:underline">Securities</a> before entering prices.</p>
+			} else {
+				<form method="post" action="/prices" class="mt-4 flex flex-wrap items-end gap-2">
+					<div>
+						<label class="block text-xs" for="security_id">Security</label>
+						<select id="security_id" name="security_id" class="rounded border px-2 py-1">
+							for _, s := range securities {
+								<option value={ accountID(s.ID) }>{ s.Symbol }</option>
+							}
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs" for="effective_date">Effective date</label>
+						<input id="effective_date" name="effective_date" type="date" required class="rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="price">Price</label>
+						<input id="price" name="price" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+					</div>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Add</button>
+				</form>
+			}
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Security</th>
+						<th>Effective</th>
+						<th class="text-right">Price</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(prices) == 0 {
+						<tr><td colspan="3" class="py-2 text-muted">No prices yet.</td></tr>
+					}
+					for _, p := range prices {
+						<tr class="border-t border-black/5">
+							<td class="py-1">{ p.Symbol }</td>
+							<td>{ p.EffectiveDate }</td>
+							<td class="text-right">{ p.Price }</td>
 						</tr>
 					}
 				</tbody>

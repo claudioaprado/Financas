@@ -60,13 +60,29 @@ type TxRow struct {
 
 // HoldingRow is one derived position on an investment account's detail page
 // (Story 4.2): all figures pre-formatted; values are derived on read (AD-2).
+// The price-dependent fields (Story 4.3) are populated only when HasPrice is
+// true; otherwise the page renders "—" for them.
 type HoldingRow struct {
-	Symbol       string
-	Name         string
-	Quantity     string
-	AvgCost      string
-	CostBasis    string
-	RealizedGain string
+	Symbol             string
+	Name               string
+	Quantity           string
+	AvgCost            string
+	CostBasis          string
+	RealizedGain       string
+	HasPrice           bool
+	Price              string // latest price (native), e.g. "16.0000 BRL"
+	PriceDate          string // effective date of that price, e.g. "2024-06-01"
+	MarketValue        string // quantity × price (native)
+	UnrealizedGain     string // market value − cost basis (native)
+	UnrealizedNegative bool   // drives red styling when the unrealized G/L is a loss
+}
+
+// PriceRow is one effective-dated security price on the prices page (Story 4.3),
+// pre-formatted for display.
+type PriceRow struct {
+	Symbol        string
+	EffectiveDate string
+	Price         string
 }
 
 // SecurityChoice is one option in an investment account's trade <select>

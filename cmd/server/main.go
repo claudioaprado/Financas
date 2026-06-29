@@ -23,6 +23,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
+	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
@@ -74,6 +75,7 @@ func main() {
 			Ready:         pool.Ping,
 			Settings:      settings.New(pool),
 			ExchangeRates: exchangerate.New(pool),
+			Prices:        price.New(pool),
 			Accounts:      account.New(pool),
 			Transactions:  transaction.New(pool),
 			Categories:    category.New(pool),

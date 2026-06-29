@@ -454,16 +454,25 @@ func (s *Service) insertTrade(ctx context.Context, params store.CreateTransactio
 }
 
 // HoldingView is one derived position formatted for display: quantity, average
-// cost (basis ÷ quantity), cost basis, and cumulative realized gain — all in the
-// account's native currency. Market value / unrealized gain need a Price (4.3/4.4).
+// cost (basis ÷ quantity), cost basis, cumulative realized gain, and — when a
+// Price exists (Story 4.3) — the market value, unrealized gain, the price used,
+// and that price's effective date (for staleness). All money is in the account's
+// native currency; same-currency-only means no FX here (Display-Currency
+// aggregation is Story 4.4). HasPrice is false when no price exists for the
+// security on or before today; callers render "—" for the price-dependent fields.
 type HoldingView struct {
-	SecurityID   int64
-	Symbol       string
-	Name         string
-	Quantity     decimal.Decimal
-	AvgCost      money.Money
-	CostBasis    money.Money
-	RealizedGain money.Money
+	SecurityID     int64
+	Symbol         string
+	Name           string
+	Quantity       decimal.Decimal
+	AvgCost        money.Money
+	CostBasis      money.Money
+	RealizedGain   money.Money
+	HasPrice       bool
+	Price          money.Money // latest price (native), valid only when HasPrice
+	PriceDate      time.Time   // effective date of that price (staleness)
+	MarketValue    money.Money // quantity × price (native), valid only when HasPrice
+	UnrealizedGain money.Money // market value − cost basis, valid only when HasPrice
 }
 
 // Holdings derives the account's active holdings (quantity > 0) plus the
@@ -481,6 +490,19 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 	if err != nil {
 		return nil, money.Money{}, err
 	}
+	// Latest price (effective <= today) per security, for market value /
+	// unrealized gain (Story 4.3). Read directly from the store (store-not-service,
+	// AD-1) — never service/price. Same-currency-only means the price is already in
+	// the holding's currency, so there is no FX here (Display-Currency aggregation
+	// is Story 4.4).
+	latest, err := q.LatestPrices(ctx, time.Now())
+	if err != nil {
+		return nil, money.Money{}, fmt.Errorf("transaction: latest prices: %w", err)
+	}
+	prices := make(map[int64]store.LatestPricesRow, len(latest))
+	for _, p := range latest {
+		prices[p.SecurityID] = p
+	}
 	realized := decimal.Zero
 	views := make([]HoldingView, 0, len(holdings))
 	for _, h := range holdings {
@@ -489,7 +511,7 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 			continue // closed position: hidden from the active list (AC#4)
 		}
 		m := meta[h.SecurityID]
-		views = append(views, HoldingView{
+		view := HoldingView{
 			SecurityID:   h.SecurityID,
 			Symbol:       m.symbol,
 			Name:         m.name,
@@ -497,7 +519,16 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 			AvgCost:      money.New(h.CostBasis.Amount().Div(h.Quantity), cur).Rounded(),
 			CostBasis:    h.CostBasis,
 			RealizedGain: h.RealizedGain,
-		})
+		}
+		if p, ok := prices[h.SecurityID]; ok {
+			market, unrealized := domain.ValueHolding(h, p.Price)
+			view.HasPrice = true
+			view.Price = money.New(p.Price, cur).Rounded()
+			view.PriceDate = p.EffectiveDate
+			view.MarketValue = market
+			view.UnrealizedGain = unrealized
+		}
+		views = append(views, view)
 	}
 	return views, money.New(realized, cur), nil
 }

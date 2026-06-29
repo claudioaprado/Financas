@@ -46,6 +46,14 @@ type ExchangeRate struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Price struct {
+	ID            int64
+	SecurityID    int64
+	EffectiveDate time.Time
+	Price         decimal.Decimal
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Security struct {
 	ID            int64
 	Symbol        string
