@@ -86,6 +86,19 @@ type CategoryTxRow struct {
 	Amount      string // formatted money, e.g. "30.0000 USD"
 }
 
+// ImportRow is one previewed import line (Story 3.6). For error rows Date/Type/
+// Amount are empty and Reason explains why; Raw is the original line.
+type ImportRow struct {
+	Line        int
+	Date        string
+	Description string
+	Type        string
+	Amount      string
+	Status      string // "new" | "duplicate" | "error"
+	Reason      string
+	Raw         string
+}
+
 // FilterOption is one <option> in a register filter dropdown.
 type FilterOption struct {
 	ID    int64

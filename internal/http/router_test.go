@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
+	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 )
 
@@ -336,6 +338,35 @@ func (s *stubCategories) Delete(_ context.Context, id int64, force bool) error {
 	return category.ErrNotFound
 }
 
+// stubImports is an in-memory Imports for handler tests. It uses the real (pure)
+// importer.Parse and records committed content; every OK row counts as "new".
+type stubImports struct{ committed []string }
+
+func (s *stubImports) Preview(_ context.Context, _ int64, content string) (importer.Result, error) {
+	return stubImportResult(content), nil
+}
+
+func (s *stubImports) Commit(_ context.Context, _ int64, content string) (importer.Result, error) {
+	s.committed = append(s.committed, content)
+	return stubImportResult(content), nil
+}
+
+func stubImportResult(content string) importer.Result {
+	res := importer.Result{AccountName: "Acc", Currency: "USD"}
+	for _, p := range importer.Parse(content) {
+		pr := importer.PreviewRow{ParsedRow: p}
+		if p.OK {
+			pr.Status = "new"
+			res.New++
+		} else {
+			pr.Status = "error"
+			res.Errors++
+		}
+		res.Rows = append(res.Rows, pr)
+	}
+	return res
+}
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -348,6 +379,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Accounts:      &stubAccounts{},
 		Transactions:  &stubTransactions{},
 		Categories:    &stubCategories{usage: map[int64]int64{}},
+		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -925,6 +957,64 @@ func TestTransactionsRegister(t *testing.T) {
 	body := recFil.Body.String()
 	if !strings.Contains(body, "wage") || strings.Contains(body, "food") {
 		t.Errorf("type=income filter should show wage and hide food; got %q", body)
+	}
+}
+
+func TestImportPreviewAndCommit(t *testing.T) {
+	deps := testDeps(true, nil)
+	imp := &stubImports{}
+	deps.Imports = imp
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Need an account (id 1) so renderImport's Accounts.Get succeeds.
+	recAcc := httptest.NewRecorder()
+	mk := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Imp&type=cash&currency=USD"))
+	mk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAcc, withCookie(mk, cookie))
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/accounts/1/import", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth import = %d, want 303", recUnauth.Code)
+	}
+
+	// Import form renders.
+	recForm := httptest.NewRecorder()
+	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1/import", nil), cookie))
+	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Import transactions") {
+		t.Fatalf("import form = %d, missing heading", recForm.Code)
+	}
+
+	content := "15/03/2024\tSalary\t5.000,00\n31/02/24\tBad\t10,00\n" // 1 valid + 1 error
+	body := url.Values{"content": {content}}.Encode()
+
+	// Preview shows a new row, an error row, and a commit button.
+	recPrev := httptest.NewRecorder()
+	prev := httptest.NewRequest(http.MethodPost, "/accounts/1/import/preview", strings.NewReader(body))
+	prev.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recPrev, withCookie(prev, cookie))
+	pb := recPrev.Body.String()
+	for _, want := range []string{"Salary", "+5000.0000 USD", "error:", "Commit 1 new rows"} {
+		if !strings.Contains(pb, want) {
+			t.Errorf("preview missing %q", want)
+		}
+	}
+
+	// Commit records the content and redirects to the account detail.
+	recCommit := httptest.NewRecorder()
+	commit := httptest.NewRequest(http.MethodPost, "/accounts/1/import/commit", strings.NewReader(body))
+	commit.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recCommit, withCookie(commit, cookie))
+	if recCommit.Code != http.StatusSeeOther || recCommit.Header().Get("Location") != "/accounts/1" {
+		t.Fatalf("commit = %d -> %q, want 303 -> /accounts/1", recCommit.Code, recCommit.Header().Get("Location"))
+	}
+	if len(imp.committed) != 1 || imp.committed[0] != content {
+		t.Errorf("commit should have recorded the content; got %v", imp.committed)
 	}
 }
 

@@ -7,6 +7,7 @@ package http
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
+	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/web"
 )
@@ -86,6 +88,13 @@ type Categories interface {
 	Delete(ctx context.Context, id int64, force bool) error
 }
 
+// Imports previews and commits tab-delimited file imports. Defined here
+// (consumer side) and implemented by service/importer.
+type Imports interface {
+	Preview(ctx context.Context, accountID int64, content string) (importer.Result, error)
+	Commit(ctx context.Context, accountID int64, content string) (importer.Result, error)
+}
+
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
 	Sessions      *scs.SessionManager
@@ -96,6 +105,7 @@ type Deps struct {
 	Accounts      Accounts
 	Transactions  Transactions
 	Categories    Categories
+	Imports       Imports
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -154,6 +164,9 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
 		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
 		pr.Post("/accounts/{id}/transfer", txTransfer(deps))
+		pr.Get("/accounts/{id}/import", importForm(deps))
+		pr.Post("/accounts/{id}/import/preview", importPreview(deps))
+		pr.Post("/accounts/{id}/import/commit", importCommit(deps))
 		pr.Get("/categories", categoriesPage(deps))
 		pr.Post("/categories", categoriesCreate(deps))
 		pr.Post("/categories/delete", categoriesDelete(deps))
@@ -438,6 +451,100 @@ func txTransfer(deps Deps) http.HandlerFunc {
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
 	}
+}
+
+func importForm(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		renderImport(deps, w, req, acctID, "", nil, "", http.StatusOK)
+	}
+}
+
+func importPreview(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		content := readImportContent(req)
+		res, err := deps.Imports.Preview(req.Context(), acctID, content)
+		if err != nil {
+			renderImport(deps, w, req, acctID, content, nil, "Could not read import: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		renderImport(deps, w, req, acctID, content, &res, "", http.StatusOK)
+	}
+}
+
+func importCommit(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		content := req.PostFormValue("content")
+		res, err := deps.Imports.Commit(req.Context(), acctID, content)
+		if err != nil {
+			renderImport(deps, w, req, acctID, content, nil, "Could not import: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = res
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+// readImportContent reads the import text from an uploaded file (multipart
+// "file") or, failing that, the "content" form field.
+func readImportContent(req *http.Request) string {
+	if err := req.ParseMultipartForm(8 << 20); err == nil {
+		if f, _, ferr := req.FormFile("file"); ferr == nil {
+			defer f.Close()
+			if b, rerr := io.ReadAll(f); rerr == nil && len(b) > 0 {
+				return string(b)
+			}
+		}
+	}
+	return req.FormValue("content")
+}
+
+func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID int64, content string, res *importer.Result, errMsg string, code int) {
+	acct, err := deps.Accounts.Get(req.Context(), acctID)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	var rows []web.ImportRow
+	newCount := 0
+	hasResult := res != nil
+	if res != nil {
+		newCount = res.New
+		for _, r := range res.Rows {
+			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Raw: r.Raw}
+			if r.OK {
+				ir.Date = r.Date.Format("2006-01-02")
+				ir.Type = r.Type
+				sign := "+"
+				if r.Type == "expense" {
+					sign = "-"
+				}
+				ir.Amount = sign + money.New(r.Amount, acct.Currency).String()
+			}
+			rows = append(rows, ir)
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.ImportPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Currency), content, rows, newCount, hasResult, errMsg).Render(req.Context(), w)
 }
 
 func transactionsRegister(deps Deps) http.HandlerFunc {

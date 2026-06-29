@@ -57,4 +57,5 @@ type Transaction struct {
 	Description   string
 	CreatedAt     pgtype.Timestamptz
 	CategoryID    pgtype.Int8
+	ImportHash    pgtype.Text
 }

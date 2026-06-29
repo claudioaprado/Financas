@@ -13,10 +13,43 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const createImportedTransaction = `-- name: CreateImportedTransaction :execrows
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type CreateImportedTransactionParams struct {
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	FromAmount    decimal.Decimal
+	ToAmount      decimal.Decimal
+	OccurredOn    time.Time
+	Description   string
+	ImportHash    pgtype.Text
+}
+
+func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createImportedTransaction,
+		arg.Type,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.FromAmount,
+		arg.ToAmount,
+		arg.OccurredOn,
+		arg.Description,
+		arg.ImportHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, category_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
 `
 
 type CreateTransactionParams struct {
@@ -53,6 +86,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.Description,
 		&i.CreatedAt,
 		&i.CategoryID,
+		&i.ImportHash,
 	)
 	return i, err
 }
@@ -69,8 +103,34 @@ func (q *Queries) DeleteTransaction(ctx context.Context, id int64) (int64, error
 	return result.RowsAffected(), nil
 }
 
+const listAccountImportHashes = `-- name: ListAccountImportHashes :many
+SELECT import_hash
+FROM transaction
+WHERE import_hash IS NOT NULL AND (from_account_id = $1 OR to_account_id = $1)
+`
+
+func (q *Queries) ListAccountImportHashes(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, listAccountImportHashes, fromAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var import_hash pgtype.Text
+		if err := rows.Scan(&import_hash); err != nil {
+			return nil, err
+		}
+		items = append(items, import_hash)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAccountTransactions = `-- name: ListAccountTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
 FROM transaction
 WHERE from_account_id = $1 OR to_account_id = $1
 ORDER BY occurred_on DESC, id DESC
@@ -96,6 +156,7 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 			&i.Description,
 			&i.CreatedAt,
 			&i.CategoryID,
+			&i.ImportHash,
 		); err != nil {
 			return nil, err
 		}
@@ -108,7 +169,7 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
 FROM transaction
 ORDER BY occurred_on DESC, id DESC
 `
@@ -133,6 +194,7 @@ func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
 			&i.Description,
 			&i.CreatedAt,
 			&i.CategoryID,
+			&i.ImportHash,
 		); err != nil {
 			return nil, err
 		}

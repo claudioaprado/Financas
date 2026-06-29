@@ -175,6 +175,15 @@ page reload, and the form still works without JavaScript. Each row shows its own
 native currency; cross-currency totals are Epic 5, and a Security filter arrives
 with Epic 4.
 
+**Import** (from a cash/credit account's detail page) loads a tab-delimited
+`date⇥description⇥value` statement: dates `dd/mm/yy` or `dd/mm/yyyy` (two-digit
+years pivot 00–69 → 2000s, 70–99 → 1900s), values in Brazilian format
+(`1.234,56`); a negative value becomes an Expense, a positive an Income, in the
+account's currency. You **preview** the parsed rows first — each is marked new,
+duplicate, or error (with a reason; a bad row never aborts the batch) — then
+commit the new ones. Re-importing the same file is **idempotent**: a per-row hash
+of `(account_id, date, description, value)` is stored, so nothing is duplicated.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

@@ -136,7 +136,7 @@ func (q *Queries) ListCategories(ctx context.Context) ([]Category, error) {
 }
 
 const listCategoryTransactions = `-- name: ListCategoryTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
 FROM transaction
 WHERE category_id = $1
 ORDER BY occurred_on DESC, id DESC
@@ -162,6 +162,7 @@ func (q *Queries) ListCategoryTransactions(ctx context.Context, categoryID pgtyp
 			&i.Description,
 			&i.CreatedAt,
 			&i.CategoryID,
+			&i.ImportHash,
 		); err != nil {
 			return nil, err
 		}
