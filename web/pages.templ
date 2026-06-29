@@ -154,14 +154,14 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 // register, with an add/edit form and per-row delete (Story 3.1). The balance is
 // derived on read by domain.AccountBalance (AD-2/AD-10); the signed amounts are
 // presentation only.
-templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balance string, types []string, txns []TxRow, editing bool, edit TxRow, errMsg string) {
+templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, txns []TxRow, editing bool, edit TxRow, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
 			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
 			<p class="text-sm text-muted">{ accType } · { currency }</p>
 			<div class="mt-4">
-				<p class="text-sm text-muted">Balance</p>
+				<p class="text-sm text-muted">{ balanceLabel }</p>
 				<p class="text-3xl font-bold">{ balance }</p>
 			</div>
 			if errMsg != "" {

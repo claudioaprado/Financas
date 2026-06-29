@@ -111,14 +111,35 @@ func TestTransaction(t *testing.T) {
 		t.Errorf("list = %+v; want one expense of 50", list)
 	}
 
-	// Validation.
+	// Credit accounts: an expense increases the balance owed (signed balance goes
+	// negative); income (a refund) reduces it.
 	credit, err := accts.Create(ctx, fmt.Sprintf("Card-%d", run), account.Credit, money.USD)
 	if err != nil {
 		t.Fatalf("create credit account: %v", err)
 	}
-	if _, err := svc.Record(ctx, credit.ID, Expense, decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrNotCashAccount) {
-		t.Errorf("expense on credit = %v; want ErrNotCashAccount", err)
+	if _, err := svc.Record(ctx, credit.ID, Expense, decimal.RequireFromString("200"), d(t, "2024-01-07"), "tv"); err != nil {
+		t.Fatalf("expense on credit: %v", err)
 	}
+	if bal, err := svc.Balance(ctx, credit.ID); err != nil || !bal.Amount().Equal(decimal.RequireFromString("-200")) {
+		t.Errorf("credit balance after expense = %v, %v; want -200 (owed 200)", bal.Amount(), err)
+	}
+	if _, err := svc.Record(ctx, credit.ID, Income, decimal.RequireFromString("50"), d(t, "2024-01-08"), "refund"); err != nil {
+		t.Fatalf("refund on credit: %v", err)
+	}
+	if bal, err := svc.Balance(ctx, credit.ID); err != nil || !bal.Amount().Equal(decimal.RequireFromString("-150")) {
+		t.Errorf("credit balance after refund = %v, %v; want -150 (owed 150)", bal.Amount(), err)
+	}
+
+	// Investment accounts reject plain income/expense (Epic 4 handles their cash flow).
+	invest, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.USD)
+	if err != nil {
+		t.Fatalf("create investment account: %v", err)
+	}
+	if _, err := svc.Record(ctx, invest.ID, Expense, decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrUnsupportedAccountType) {
+		t.Errorf("expense on investment = %v; want ErrUnsupportedAccountType", err)
+	}
+
+	// Validation.
 	if _, err := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("0"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrNonPositiveAmount) {
 		t.Errorf("zero amount = %v; want ErrNonPositiveAmount", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/shopspring/decimal"
 
+	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
@@ -411,9 +412,18 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		http.NotFound(w, req)
 		return
 	}
+	// Credit accounts present their balance as a positive amount owed (a
+	// liability); cash/investment show the signed balance. The owed figure is
+	// produced by domain (AD-10) — http only renders it.
+	balLabel := "Balance"
 	balStr := ""
 	if bal, bErr := deps.Transactions.Balance(req.Context(), acctID); bErr == nil {
-		balStr = bal.String()
+		if account.AccountType(acct.Type) == account.Credit {
+			balLabel = "Balance owed"
+			balStr = domain.AmountOwed(bal).String()
+		} else {
+			balStr = bal.String()
+		}
 	}
 	var rows []web.TxRow
 	var edit web.TxRow
@@ -447,7 +457,7 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	types := []string{string(transaction.Income), string(transaction.Expense)}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balStr, types, rows, editing, edit, errMsg).Render(req.Context(), w)
+	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, rows, editing, edit, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

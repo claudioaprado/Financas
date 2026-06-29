@@ -140,7 +140,12 @@ debits it (Story 3.1; transfers populate both sides later). Amounts are
 non-negative magnitudes at `NUMERIC(19,4)`, with direction from `type` (AD-4).
 An account's balance is computed by the single canonical `domain.AccountBalance`
 function (AD-10) — open an account from `/accounts` to record income/expense and
-see the balance re-derive as you add, edit, or delete rows.
+see the balance re-derive as you add, edit, or delete rows. Income/expense apply
+to **cash and credit** accounts: an expense on a credit account increases the
+**balance owed**, shown as a positive liability (`domain.AmountOwed`), and a
+refund (income) reduces it. Because the underlying balance stays signed (a credit
+account's is negative), a credit balance reduces Net Worth automatically in
+Epic 4.
 
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):

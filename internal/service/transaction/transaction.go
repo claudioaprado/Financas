@@ -5,8 +5,10 @@
 // non-negative magnitudes (AD-4); income credits an account, expense debits it,
 // via the one-row from/to ledger shape (AD-9).
 //
-// Story 3.1 covers income/expense on cash accounts only; credit (3.2), transfers
-// (3.3), categories (3.4), and investment cash flows (Epic 4) extend this.
+// Income/expense apply to cash and credit accounts (an expense on credit
+// increases the balance owed; income/refund reduces it). Transfers (3.3),
+// categories (3.4), and investment cash flows (Epic 4) extend this; investment
+// accounts reject plain income/expense.
 package transaction
 
 import (
@@ -41,9 +43,11 @@ func (t TxType) IsValid() bool { return t == Income || t == Expense }
 // Input/lookup errors. The service is the validation authority; DB constraints
 // are the backstop.
 var (
-	ErrAccountNotFound   = errors.New("transaction: account not found")
-	ErrNotCashAccount    = errors.New("transaction: income/expense require a cash account")
-	ErrInvalidType       = errors.New("transaction: type must be income or expense")
+	ErrAccountNotFound = errors.New("transaction: account not found")
+	// ErrUnsupportedAccountType is returned when income/expense are recorded on
+	// an account type that does not take them (investment cash flow is Epic 4).
+	ErrUnsupportedAccountType = errors.New("transaction: income/expense require a cash or credit account")
+	ErrInvalidType            = errors.New("transaction: type must be income or expense")
 	ErrNonPositiveAmount = errors.New("transaction: amount must be positive")
 	ErrTxNotFound        = errors.New("transaction: not found")
 )
@@ -216,8 +220,8 @@ func (s *Service) validate(ctx context.Context, accountID int64, typ TxType, amo
 	if err != nil {
 		return fmt.Errorf("transaction: get account: %w", err)
 	}
-	if acct.Type != "cash" {
-		return ErrNotCashAccount
+	if acct.Type != "cash" && acct.Type != "credit" {
+		return ErrUnsupportedAccountType
 	}
 	return nil
 }

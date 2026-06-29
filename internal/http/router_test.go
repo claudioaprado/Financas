@@ -590,6 +590,45 @@ func TestAccountTransactionsFlow(t *testing.T) {
 	post("/accounts/1/transaction", "type=income&amount=abc&date=2024-01-07", http.StatusBadRequest)
 }
 
+func TestCreditAccountShowsBalanceOwed(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Create a credit USD account (id 1 in the stub).
+	recAcct := httptest.NewRecorder()
+	mk := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Card&type=credit&currency=USD"))
+	mk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAcct, withCookie(mk, cookie))
+	if recAcct.Code != http.StatusSeeOther {
+		t.Fatalf("create credit account = %d, want 303", recAcct.Code)
+	}
+
+	// Two expenses (500 + 30) -> owed 530. The 530 total appears only in the
+	// balance area, so it cleanly proves the positive-liability presentation
+	// (the individual rows render signed -500 / -30, which is correct).
+	for _, amt := range []string{"500", "30"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/accounts/1/transaction", strings.NewReader("type=expense&amount="+amt+"&date=2024-03-01&description=buy"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("credit expense %s = %d, want 303", amt, rec.Code)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1", nil), cookie))
+	body := rec.Body.String()
+	if !strings.Contains(body, "Balance owed") {
+		t.Errorf("credit detail should label the balance 'Balance owed'")
+	}
+	if !strings.Contains(body, "530.0000 USD") {
+		t.Errorf("credit detail should show the positive amount owed (530.0000 USD)")
+	}
+}
+
 func TestCSRFRejectsCrossOrigin(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := loginPost("owner", "right")

@@ -40,3 +40,19 @@ func TestAccountBalance(t *testing.T) {
 		t.Errorf("empty balance = %s, want 0", b.Amount())
 	}
 }
+
+func TestAmountOwed(t *testing.T) {
+	// A credit account owing 300 has a signed balance of -300.
+	owed := AmountOwed(money.New(dec("-300"), money.USD))
+	if !owed.Amount().Equal(dec("300")) || owed.Currency() != money.USD {
+		t.Errorf("AmountOwed(-300 USD) = %s %s, want 300 USD", owed.Amount(), owed.Currency())
+	}
+	// A positive (credit/overpaid) balance owes a negative amount.
+	if o := AmountOwed(money.New(dec("50"), money.BRL)); !o.Amount().Equal(dec("-50")) {
+		t.Errorf("AmountOwed(50 BRL) = %s, want -50", o.Amount())
+	}
+	// Zero owes zero.
+	if o := AmountOwed(money.New(decimal.Zero, money.USD)); !o.Amount().IsZero() {
+		t.Errorf("AmountOwed(0) = %s, want 0", o.Amount())
+	}
+}

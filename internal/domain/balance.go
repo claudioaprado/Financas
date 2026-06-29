@@ -35,3 +35,11 @@ func AccountBalance(accountID int64, currency money.Currency, txns []BalanceTxn)
 	}
 	return money.New(net, currency)
 }
+
+// AmountOwed presents a liability account's balance as a positive amount owed:
+// it is the negation of the signed AccountBalance (a credit account's balance is
+// negative when money is owed). This transforms an already-derived figure for
+// display (AD-10); it does not re-derive the ledger.
+func AmountOwed(balance money.Money) money.Money {
+	return money.New(balance.Amount().Neg(), balance.Currency())
+}
