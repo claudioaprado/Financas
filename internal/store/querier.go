@@ -30,6 +30,7 @@ type Querier interface {
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
+	ListTransactions(ctx context.Context) ([]Transaction, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)

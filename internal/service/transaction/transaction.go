@@ -433,6 +433,99 @@ func legs(accountID int64, typ TxType, amount decimal.Decimal) (from, to pgtype.
 // perspective: crediting the account (income, or transfer in) is Incoming with
 // the to_amount; debiting it (expense, or transfer out) uses the from_amount.
 // For transfers, Counterparty is the other account's name.
+// RegisterFilter narrows the cross-account register. A zero AccountID/CategoryID
+// or an empty Type means "all".
+type RegisterFilter struct {
+	AccountID  int64
+	Type       TxType
+	CategoryID int64
+}
+
+// RegisterRow is one transaction formatted for the cross-account register.
+// Amount is the primary leg; ToAmount is the destination leg of a cross-currency
+// transfer (zero otherwise). Incoming drives the income/expense sign + color;
+// transfers are neutral.
+type RegisterRow struct {
+	ID            int64
+	Date          time.Time
+	Type          TxType
+	Description   string
+	Category      string
+	Account       string // account name (income/expense) or "From → To" (transfer)
+	Amount        money.Money
+	ToAmount      money.Money
+	Incoming      bool
+	IsTransfer    bool
+	CrossCurrency bool
+}
+
+// Register returns the ledger newest-first, narrowed by the filter and enriched
+// with account/category names for display. It reads only (AD-2); a transfer
+// appears once (AD-9), never double-counted.
+func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow, error) {
+	q := store.New(s.pool)
+	rows, err := q.ListTransactions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: register: %w", err)
+	}
+	accts, err := q.ListAllAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: list accounts: %w", err)
+	}
+	name := make(map[int64]string, len(accts))
+	cur := make(map[int64]money.Currency, len(accts))
+	for _, a := range accts {
+		name[a.ID], cur[a.ID] = a.Name, money.Currency(a.Currency)
+	}
+	catNames, err := categoryNames(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]RegisterRow, 0, len(rows))
+	for _, r := range rows {
+		fromID, toID := nullID(r.FromAccountID), nullID(r.ToAccountID)
+		catID := nullID(r.CategoryID)
+		typ := TxType(r.Type)
+		if f.Type != "" && typ != f.Type {
+			continue
+		}
+		if f.CategoryID != 0 && catID != f.CategoryID {
+			continue
+		}
+		if f.AccountID != 0 && fromID != f.AccountID && toID != f.AccountID {
+			continue
+		}
+		row := RegisterRow{
+			ID:          r.ID,
+			Date:        r.OccurredOn,
+			Type:        typ,
+			Description: r.Description,
+			Category:    catNames[catID],
+		}
+		switch typ {
+		case Income:
+			row.Account = name[toID]
+			row.Amount = money.New(r.ToAmount, cur[toID])
+			row.Incoming = true
+		case Transfer:
+			row.Account = name[fromID] + " → " + name[toID]
+			row.Amount = money.New(r.FromAmount, cur[fromID])
+			row.IsTransfer = true
+			if cur[fromID] != cur[toID] {
+				row.CrossCurrency = true
+				row.ToAmount = money.New(r.ToAmount, cur[toID])
+			}
+		default: // Expense
+			row.Account = name[fromID]
+			row.Amount = money.New(r.FromAmount, cur[fromID])
+			row.Incoming = false
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
 func toTransaction(accountID int64, r store.Transaction, names, catNames map[int64]string) Transaction {
 	catID := nullID(r.CategoryID)
 	t := Transaction{

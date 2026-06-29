@@ -166,6 +166,15 @@ in the service). A category's summary page lists its transactions and a total
 are guarded: a category in use can't be removed until you reassign its
 transactions, or use **delete and unassign**, which clears it from them first.
 
+**The register** (`/transactions`) lists every account's transactions
+newest-first, with signed colored amounts (green income / red expense; transfers
+neutral, shown as `from → to`) and type/Category badges (UX-DR5). Filter by
+account, type, or category — the list updates in place via **HTMX** (the vendored
+`web/static/js/htmx.min.js`, served from the embedded static FS) without a full
+page reload, and the form still works without JavaScript. Each row shows its own
+native currency; cross-currency totals are Epic 5, and a Security filter arrives
+with Epic 4.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

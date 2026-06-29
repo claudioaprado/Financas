@@ -74,6 +74,7 @@ type Transactions interface {
 	Balance(ctx context.Context, accountID int64) (money.Money, error)
 	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
 	CategoryTransactions(ctx context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error)
+	Register(ctx context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error)
 }
 
 // Categories creates, lists, and deletes income/expense categories. Defined here
@@ -143,7 +144,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Use(requireAuth(deps.Sessions))
 		pr.Get("/", renderPage(deps, "dashboard", func(d web.ShellData) templ.Component { return web.DashboardPage(d) }))
 		pr.Get("/investments", renderPage(deps, "investments", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Investments") }))
-		pr.Get("/transactions", renderPage(deps, "transactions", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Transactions") }))
+		pr.Get("/transactions", transactionsRegister(deps))
 		pr.Get("/accounts", accountsForm(deps))
 		pr.Post("/accounts", accountsCreate(deps))
 		pr.Post("/accounts/rename", accountsRename(deps))
@@ -437,6 +438,74 @@ func txTransfer(deps Deps) http.HandlerFunc {
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
 	}
+}
+
+func transactionsRegister(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, _ := strconv.ParseInt(req.URL.Query().Get("account"), 10, 64)
+		catID, _ := strconv.ParseInt(req.URL.Query().Get("category"), 10, 64)
+		typ := transaction.TxType(req.URL.Query().Get("type"))
+
+		regRows, _ := deps.Transactions.Register(req.Context(), transaction.RegisterFilter{
+			AccountID:  acctID,
+			Type:       typ,
+			CategoryID: catID,
+		})
+		rows := make([]web.RegisterRow, 0, len(regRows))
+		for _, r := range regRows {
+			rows = append(rows, web.RegisterRow{
+				ID:          r.ID,
+				Date:        r.Date.Format("2006-01-02"),
+				Type:        string(r.Type),
+				Description: r.Description,
+				Category:    r.Category,
+				Account:     r.Account,
+				Amount:      registerAmount(r),
+				Incoming:    r.Incoming,
+				IsTransfer:  r.IsTransfer,
+			})
+		}
+
+		// HTMX filter change → swap just the rows.
+		if req.Header.Get("HX-Request") == "true" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_ = web.TransactionRows(rows).Render(req.Context(), w)
+			return
+		}
+
+		var accounts []web.FilterOption
+		if accts, err := deps.Accounts.List(req.Context(), true); err == nil {
+			for _, a := range accts {
+				accounts = append(accounts, web.FilterOption{ID: a.ID, Label: a.Name})
+			}
+		}
+		var cats []web.FilterOption
+		if deps.Categories != nil {
+			if cs, err := deps.Categories.List(req.Context()); err == nil {
+				for _, c := range cs {
+					cats = append(cats, web.FilterOption{ID: c.ID, Label: c.Name})
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = web.TransactionsPage(shellData(deps, req.Context(), "transactions"), accounts, cats, acctID, string(typ), catID, rows).Render(req.Context(), w)
+	}
+}
+
+// registerAmount composes a register row's amount string: signed for
+// income/expense, neutral legs for transfers (presentation only).
+func registerAmount(r transaction.RegisterRow) string {
+	if r.IsTransfer {
+		s := r.Amount.String()
+		if r.CrossCurrency {
+			s += " → " + r.ToAmount.String()
+		}
+		return s
+	}
+	if r.Incoming {
+		return "+" + r.Amount.String()
+	}
+	return "-" + r.Amount.String()
 }
 
 func categoriesPage(deps Deps) http.HandlerFunc {

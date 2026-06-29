@@ -252,6 +252,46 @@ func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transacti
 	return out, nil
 }
 
+func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error) {
+	seen := map[int64]bool{}
+	var out []transaction.RegisterRow
+	for _, r := range s.rows {
+		if seen[r.ID] {
+			continue
+		}
+		if f.Type != "" && r.Type != f.Type {
+			continue
+		}
+		if f.CategoryID != 0 && r.CategoryID != f.CategoryID {
+			continue
+		}
+		if f.AccountID != 0 {
+			match := false
+			for _, rr := range s.rows {
+				if rr.ID == r.ID && rr.AccountID == f.AccountID {
+					match = true
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		seen[r.ID] = true
+		out = append(out, transaction.RegisterRow{
+			ID:          r.ID,
+			Date:        r.Date,
+			Type:        r.Type,
+			Description: r.Description,
+			Category:    r.CategoryName,
+			Account:     fmt.Sprintf("acct%d", r.AccountID),
+			Amount:      money.New(r.Amount, money.USD),
+			Incoming:    r.Incoming,
+			IsTransfer:  r.Type == transaction.Transfer,
+		})
+	}
+	return out, nil
+}
+
 // stubCategories is an in-memory Categories for handler tests.
 type stubCategories struct {
 	cats   []category.Category
@@ -822,6 +862,69 @@ func TestCategoriesPageAndGuardedDelete(t *testing.T) {
 	post("/categories/delete", "id=1&force=true", http.StatusSeeOther)
 	if b := body("/categories"); strings.Contains(b, "Food") {
 		t.Errorf("category should be gone after force delete")
+	}
+}
+
+func TestTransactionsRegister(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("POST %s = %d, want 303", path, rec.Code)
+		}
+	}
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/transactions", nil))
+	if recUnauth.Code != http.StatusSeeOther || recUnauth.Header().Get("Location") != "/login" {
+		t.Fatalf("unauth GET /transactions = %d -> %q, want 303 -> /login", recUnauth.Code, recUnauth.Header().Get("Location"))
+	}
+
+	// An account with an income and an expense.
+	post("/accounts", "name=Acc&type=cash&currency=USD")
+	post("/accounts/1/transaction", "type=income&amount=100&date=2024-08-01&description=wage")
+	post("/accounts/1/transaction", "type=expense&amount=40&date=2024-08-02&description=food")
+
+	// Full page: filter form + both rows.
+	recFull := httptest.NewRecorder()
+	router.ServeHTTP(recFull, withCookie(httptest.NewRequest(http.MethodGet, "/transactions", nil), cookie))
+	full := recFull.Body.String()
+	for _, want := range []string{"All accounts", "All types", "wage", "food", "<!doctype html>", "htmx.min.js"} {
+		if !strings.Contains(strings.ToLower(full), strings.ToLower(want)) {
+			t.Errorf("full register page missing %q", want)
+		}
+	}
+
+	// HTMX request returns ONLY the rows partial (no shell/doctype).
+	recHX := httptest.NewRecorder()
+	hxReq := httptest.NewRequest(http.MethodGet, "/transactions", nil)
+	hxReq.Header.Set("HX-Request", "true")
+	router.ServeHTTP(recHX, withCookie(hxReq, cookie))
+	hx := recHX.Body.String()
+	if strings.Contains(strings.ToLower(hx), "<!doctype") || strings.Contains(hx, "Welcome back") {
+		t.Errorf("HTMX response should be a bare partial, got shell markup")
+	}
+	if !strings.Contains(hx, "wage") || !strings.Contains(hx, "food") {
+		t.Errorf("HTMX partial should contain the rows")
+	}
+
+	// Type filter narrows to income only.
+	recFil := httptest.NewRecorder()
+	fil := httptest.NewRequest(http.MethodGet, "/transactions?type=income", nil)
+	fil.Header.Set("HX-Request", "true")
+	router.ServeHTTP(recFil, withCookie(fil, cookie))
+	body := recFil.Body.String()
+	if !strings.Contains(body, "wage") || strings.Contains(body, "food") {
+		t.Errorf("type=income filter should show wage and hide food; got %q", body)
 	}
 }
 

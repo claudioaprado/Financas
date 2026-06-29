@@ -107,6 +107,43 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 	return items, nil
 }
 
+const listTransactions = `-- name: ListTransactions :many
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+FROM transaction
+ORDER BY occurred_on DESC, id DESC
+`
+
+func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
+	rows, err := q.db.Query(ctx, listTransactions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Transaction{}
+	for rows.Next() {
+		var i Transaction
+		if err := rows.Scan(
+			&i.ID,
+			&i.Type,
+			&i.FromAccountID,
+			&i.ToAccountID,
+			&i.FromAmount,
+			&i.ToAmount,
+			&i.OccurredOn,
+			&i.Description,
+			&i.CreatedAt,
+			&i.CategoryID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateTransaction = `-- name: UpdateTransaction :execrows
 UPDATE transaction
 SET type = $2, from_account_id = $3, to_account_id = $4, from_amount = $5, to_amount = $6, occurred_on = $7, description = $8, category_id = $9

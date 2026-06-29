@@ -16,3 +16,8 @@ SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurre
 FROM transaction
 WHERE from_account_id = $1 OR to_account_id = $1
 ORDER BY occurred_on DESC, id DESC;
+
+-- name: ListTransactions :many
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id
+FROM transaction
+ORDER BY occurred_on DESC, id DESC;

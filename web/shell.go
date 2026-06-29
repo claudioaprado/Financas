@@ -86,6 +86,27 @@ type CategoryTxRow struct {
 	Amount      string // formatted money, e.g. "30.0000 USD"
 }
 
+// FilterOption is one <option> in a register filter dropdown.
+type FilterOption struct {
+	ID    int64
+	Label string
+}
+
+// RegisterRow is one transaction in the cross-account register (UX-DR5). Amount
+// is the composed display string (signed for income/expense, neutral legs for
+// transfers); Incoming/IsTransfer drive the colour.
+type RegisterRow struct {
+	ID          int64
+	Date        string
+	Type        string
+	Description string
+	Category    string
+	Account     string
+	Amount      string
+	Incoming    bool
+	IsTransfer  bool
+}
+
 // NavItem is one top-navigation entry.
 type NavItem struct {
 	Label string

@@ -422,6 +422,93 @@ templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRo
 	}
 }
 
+// TransactionsPage is the cross-account register (Story 3.5): a filter form
+// (account / type / category) and a newest-first list. The filter form is a
+// plain GET form (works without JS) enhanced with HTMX so changing a filter
+// swaps just the table body (#tx-rows) without a full reload (UX-DR5).
+templ TransactionsPage(data ShellData, accounts []FilterOption, categories []FilterOption, selAccount int64, selType string, selCategory int64, rows []RegisterRow) {
+	@Shell(data) {
+		<section class="rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Transactions</h1>
+			<p class="mt-1 text-sm text-muted">Every account, newest first. Filter to narrow the list.</p>
+			<form
+				method="get"
+				action="/transactions"
+				hx-get="/transactions"
+				hx-target="#tx-rows"
+				hx-swap="innerHTML"
+				hx-trigger="change"
+				class="mt-4 flex flex-wrap items-end gap-2"
+			>
+				<div>
+					<label class="block text-xs" for="account">Account</label>
+					<select id="account" name="account" class="rounded border px-2 py-1">
+						<option value="" selected?={ selAccount == 0 }>All accounts</option>
+						for _, a := range accounts {
+							<option value={ accountID(a.ID) } selected?={ a.ID == selAccount }>{ a.Label }</option>
+						}
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs" for="type">Type</label>
+					<select id="type" name="type" class="rounded border px-2 py-1">
+						<option value="" selected?={ selType == "" }>All types</option>
+						<option value="income" selected?={ selType == "income" }>income</option>
+						<option value="expense" selected?={ selType == "expense" }>expense</option>
+						<option value="transfer" selected?={ selType == "transfer" }>transfer</option>
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs" for="category">Category</label>
+					<select id="category" name="category" class="rounded border px-2 py-1">
+						<option value="" selected?={ selCategory == 0 }>All categories</option>
+						for _, c := range categories {
+							<option value={ accountID(c.ID) } selected?={ c.ID == selCategory }>{ c.Label }</option>
+						}
+					</select>
+				</div>
+				<noscript><button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Filter</button></noscript>
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Date</th>
+						<th>Type</th>
+						<th>Account</th>
+						<th>Description</th>
+						<th class="text-right">Amount</th>
+					</tr>
+				</thead>
+				<tbody id="tx-rows">
+					@TransactionRows(rows)
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// TransactionRows renders the register's table rows. It is rendered standalone
+// for HTMX filter swaps and embedded inside TransactionsPage's #tx-rows.
+templ TransactionRows(rows []RegisterRow) {
+	if len(rows) == 0 {
+		<tr><td colspan="5" class="py-2 text-muted">No transactions match.</td></tr>
+	}
+	for _, r := range rows {
+		<tr class="border-t border-black/5">
+			<td class="py-1">{ r.Date }</td>
+			<td><span class="rounded bg-black/5 px-1 text-xs text-muted">{ r.Type }</span></td>
+			<td>{ r.Account }</td>
+			<td>
+				{ r.Description }
+				if r.Category != "" {
+					<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ r.Category }</span>
+				}
+			</td>
+			<td class={ "text-right", templ.KV("text-gain", r.Incoming && !r.IsTransfer), templ.KV("text-loss", !r.Incoming && !r.IsTransfer) }>{ r.Amount }</td>
+		</tr>
+	}
+}
+
 // ExchangeRatesPage lists effective-dated, directional exchange rates and an add
 // form (Story 2.2). Rates are owner-entered and never inverted (AD-6).
 templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, errMsg string) {

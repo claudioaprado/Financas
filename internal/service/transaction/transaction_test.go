@@ -228,6 +228,84 @@ func TestCategoryAssignment(t *testing.T) {
 	}
 }
 
+func TestRegister(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	a, err := accts.Create(ctx, fmt.Sprintf("RegA-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create A: %v", err)
+	}
+	b, err := accts.Create(ctx, fmt.Sprintf("RegB-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create B: %v", err)
+	}
+	cat, err := store.New(pool).CreateCategory(ctx, store.CreateCategoryParams{Name: fmt.Sprintf("Bills-%d", run), Kind: "expense"})
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+
+	if _, err := svc.Record(ctx, a.ID, Income, decimal.RequireFromString("100"), d(t, "2024-07-01"), "pay", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+	if _, err := svc.Record(ctx, a.ID, Expense, decimal.RequireFromString("40"), d(t, "2024-07-02"), "rent", cat.ID); err != nil {
+		t.Fatalf("expense: %v", err)
+	}
+	if err := svc.Transfer(ctx, a.ID, b.ID, decimal.RequireFromString("25"), decimal.RequireFromString("130"), d(t, "2024-07-03"), "fx"); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	// Filter to account A: all three rows (income, expense, transfer-from), newest-first.
+	all, err := svc.Register(ctx, RegisterFilter{AccountID: a.ID})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("register(A) = %d rows; want 3", len(all))
+	}
+	if !(all[0].Date.After(all[1].Date) || all[0].Date.Equal(all[1].Date)) || all[0].Type != Transfer {
+		t.Errorf("expected newest-first with the transfer first; got %+v", all[0])
+	}
+
+	// The transfer row names both accounts and carries both legs (cross-currency).
+	var tr RegisterRow
+	for _, r := range all {
+		if r.IsTransfer {
+			tr = r
+		}
+	}
+	if !tr.CrossCurrency || tr.Account != a.Name+" → "+b.Name {
+		t.Errorf("transfer row = %+v; want cross-currency 'A → B'", tr)
+	}
+	if !tr.Amount.Amount().Equal(decimal.RequireFromString("25")) || !tr.ToAmount.Amount().Equal(decimal.RequireFromString("130")) {
+		t.Errorf("transfer legs = %s / %s; want 25 USD / 130 BRL", tr.Amount, tr.ToAmount)
+	}
+
+	// Filter by type=expense → only the rent row; by category → same; by account B → only the transfer.
+	if exp, _ := svc.Register(ctx, RegisterFilter{AccountID: a.ID, Type: Expense}); len(exp) != 1 || exp[0].Description != "rent" {
+		t.Errorf("type filter = %+v; want one rent row", exp)
+	}
+	if byCat, _ := svc.Register(ctx, RegisterFilter{CategoryID: cat.ID}); len(byCat) != 1 || byCat[0].Category != cat.Name {
+		t.Errorf("category filter = %+v; want one row in %q", byCat, cat.Name)
+	}
+	// B is only touched by the transfer (as destination): exactly one transfer row.
+	if onB, _ := svc.Register(ctx, RegisterFilter{AccountID: b.ID}); len(onB) != 1 || !onB[0].IsTransfer {
+		t.Errorf("account B filter = %+v; want the one transfer row", onB)
+	}
+}
+
 func TestTransfer(t *testing.T) {
 	url := testDatabaseURL(t)
 	ctx := context.Background()
