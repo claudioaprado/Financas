@@ -12,10 +12,15 @@ import (
 
 type Querier interface {
 	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
+	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
+	ListActiveAccounts(ctx context.Context) ([]Account, error)
+	ListAllAccounts(ctx context.Context) ([]Account, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
+	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
+	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
 }
 

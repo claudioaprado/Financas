@@ -123,6 +123,15 @@ owner is prompted) and **never inverted** as `1/rate` (AD-6). `NUMERIC` columns
 map to `shopspring/decimal` via the pgx decimal codec + sqlc overrides — the
 decimal-money plumbing reused by all future amount/price columns (AD-4).
 
+**Accounts** (`/accounts`) are the owner's **cash**, **credit**, and
+**investment** holders, each in its own base currency. You create, **rename**,
+and **archive** them (accounts are never deleted — archiving keeps history but
+hides the account from default views and excludes it from current Net Worth).
+The account's **type** fixes its balance semantics — cash/investment carry a
+cash balance, credit tracks a balance owed — but no balance is stored: balances
+and Net Worth are **derived from the transaction ledger on read** in later epics
+(AD-2), so the page shows the balance label with a `—` placeholder for now.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

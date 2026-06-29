@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/internal/money"
+	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 )
 
@@ -67,6 +68,63 @@ func (s *stubExchangeRates) Add(_ context.Context, from, to money.Currency, eff 
 
 func (s *stubExchangeRates) List(context.Context) ([]exchangerate.Rate, error) { return s.rates, nil }
 
+// stubAccounts is an in-memory Accounts for handler tests.
+type stubAccounts struct {
+	accts  []account.Account
+	nextID int64
+}
+
+func (s *stubAccounts) Create(_ context.Context, name string, typ account.AccountType, cur money.Currency) (account.Account, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return account.Account{}, account.ErrEmptyName
+	}
+	if !typ.IsValid() {
+		return account.Account{}, account.ErrInvalidType
+	}
+	if !money.IsSupported(cur) {
+		return account.Account{}, account.ErrUnsupportedCurrency
+	}
+	s.nextID++
+	a := account.Account{ID: s.nextID, Name: name, Type: typ, Currency: cur}
+	s.accts = append(s.accts, a)
+	return a, nil
+}
+
+func (s *stubAccounts) Rename(_ context.Context, id int64, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return account.ErrEmptyName
+	}
+	for i := range s.accts {
+		if s.accts[i].ID == id {
+			s.accts[i].Name = name
+			return nil
+		}
+	}
+	return account.ErrNotFound
+}
+
+func (s *stubAccounts) SetArchived(_ context.Context, id int64, archived bool) error {
+	for i := range s.accts {
+		if s.accts[i].ID == id {
+			s.accts[i].Archived = archived
+			return nil
+		}
+	}
+	return account.ErrNotFound
+}
+
+func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.Account, error) {
+	out := []account.Account{}
+	for _, a := range s.accts {
+		if includeArchived || !a.Archived {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -76,6 +134,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Ready:         ready,
 		Settings:      &stubSettings{},
 		ExchangeRates: &stubExchangeRates{},
+		Accounts:      &stubAccounts{},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -191,12 +250,12 @@ func TestNavTargetAuthed(t *testing.T) {
 	cookie := sessionCookie(t, recLogin)
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/investments", nil), cookie))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("authed GET /accounts = %d, want 200", rec.Code)
+		t.Fatalf("authed GET /investments = %d, want 200", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Accounts") || !strings.Contains(body, "Coming soon") {
-		t.Errorf("/accounts page missing expected content")
+	if body := rec.Body.String(); !strings.Contains(body, "Investments") || !strings.Contains(body, "Coming soon") {
+		t.Errorf("/investments page missing expected content")
 	}
 }
 
@@ -288,6 +347,91 @@ func TestExchangeRatesAddAndList(t *testing.T) {
 	router.ServeHTTP(recBad, withCookie(bad, cookie))
 	if recBad.Code != http.StatusBadRequest {
 		t.Fatalf("POST same-currency = %d, want 400", recBad.Code)
+	}
+}
+
+func TestAccountsRequiresAuth(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/accounts", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("unauth GET /accounts = %d -> %q, want 303 -> /login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestAccountsCreateRenameArchive(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// GET shows the create form + the per-type balance labels.
+	recGet := httptest.NewRecorder()
+	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Create account") {
+		t.Fatalf("GET /accounts = %d, missing create form", recGet.Code)
+	}
+
+	// POST a valid account redirects, and it then appears in the list.
+	recAdd := httptest.NewRecorder()
+	add := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Checking&type=cash&currency=USD"))
+	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAdd, withCookie(add, cookie))
+	if recAdd.Code != http.StatusSeeOther {
+		t.Fatalf("POST valid account = %d, want 303", recAdd.Code)
+	}
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if body := recList.Body.String(); !strings.Contains(body, "Checking") || !strings.Contains(body, "Cash balance") {
+		t.Errorf("accounts list missing the created account or its balance label")
+	}
+
+	// Rename it (id=1, the first created account in the stub).
+	recRen := httptest.NewRecorder()
+	ren := httptest.NewRequest(http.MethodPost, "/accounts/rename", strings.NewReader("id=1&name=Main+Checking"))
+	ren.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recRen, withCookie(ren, cookie))
+	if recRen.Code != http.StatusSeeOther {
+		t.Fatalf("POST rename = %d, want 303", recRen.Code)
+	}
+	recList2 := httptest.NewRecorder()
+	router.ServeHTTP(recList2, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if !strings.Contains(recList2.Body.String(), "Main Checking") {
+		t.Errorf("renamed account not reflected in the list")
+	}
+
+	// Archive it: it drops from the default list and reappears under ?show=archived.
+	recArch := httptest.NewRecorder()
+	arch := httptest.NewRequest(http.MethodPost, "/accounts/archive", strings.NewReader("id=1&archived=true"))
+	arch.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recArch, withCookie(arch, cookie))
+	if recArch.Code != http.StatusSeeOther {
+		t.Fatalf("POST archive = %d, want 303", recArch.Code)
+	}
+	recActive := httptest.NewRecorder()
+	router.ServeHTTP(recActive, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if strings.Contains(recActive.Body.String(), "Main Checking") {
+		t.Errorf("archived account should be absent from the default list")
+	}
+	recArchived := httptest.NewRecorder()
+	router.ServeHTTP(recArchived, withCookie(httptest.NewRequest(http.MethodGet, "/accounts?show=archived", nil), cookie))
+	if !strings.Contains(recArchived.Body.String(), "Main Checking") {
+		t.Errorf("archived account should appear under show=archived")
+	}
+}
+
+func TestAccountsInvalidCreate(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// An empty name is rejected without crashing.
+	rec := httptest.NewRecorder()
+	bad := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=+&type=cash&currency=USD"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(rec, withCookie(bad, cookie))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST empty-name account = %d, want 400", rec.Code)
 	}
 }
 

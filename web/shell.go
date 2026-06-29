@@ -1,5 +1,10 @@
 package web
 
+import "strconv"
+
+// accountID renders an account's numeric id as a string for use in form fields.
+func accountID(id int64) string { return strconv.FormatInt(id, 10) }
+
 // ShellData carries the chrome state for the authenticated app shell.
 type ShellData struct {
 	OwnerName       string // shown in the greeting header
@@ -13,6 +18,19 @@ type RateRow struct {
 	To            string
 	EffectiveDate string
 	Rate          string
+}
+
+// AccountRow is one account formatted for display. BalanceLabel names the
+// balance the account's type carries ("Cash balance" for cash/investment,
+// "Balance owed" for credit); the value itself is derived from the transaction
+// ledger in later epics (AD-2), so it renders as a placeholder for now.
+type AccountRow struct {
+	ID           int64
+	Name         string
+	Type         string
+	Currency     string
+	BalanceLabel string
+	Archived     bool
 }
 
 // NavItem is one top-navigation entry.

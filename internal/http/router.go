@@ -9,6 +9,7 @@ import (
 	"context"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/a-h/templ"
@@ -18,6 +19,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/internal/money"
+	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/web"
 )
@@ -47,6 +49,15 @@ type ExchangeRates interface {
 	List(ctx context.Context) ([]exchangerate.Rate, error)
 }
 
+// Accounts creates, lists, renames, and archives the owner's accounts. Defined
+// here (consumer side) and implemented by service/account.
+type Accounts interface {
+	Create(ctx context.Context, name string, typ account.AccountType, currency money.Currency) (account.Account, error)
+	Rename(ctx context.Context, id int64, name string) error
+	SetArchived(ctx context.Context, id int64, archived bool) error
+	List(ctx context.Context, includeArchived bool) ([]account.Account, error)
+}
+
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
 	Sessions      *scs.SessionManager
@@ -54,6 +65,7 @@ type Deps struct {
 	Ready         ReadyCheck
 	Settings      Settings
 	ExchangeRates ExchangeRates
+	Accounts      Accounts
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -103,7 +115,10 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/", renderPage(deps, "dashboard", func(d web.ShellData) templ.Component { return web.DashboardPage(d) }))
 		pr.Get("/investments", renderPage(deps, "investments", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Investments") }))
 		pr.Get("/transactions", renderPage(deps, "transactions", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Transactions") }))
-		pr.Get("/accounts", renderPage(deps, "accounts", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Accounts") }))
+		pr.Get("/accounts", accountsForm(deps))
+		pr.Post("/accounts", accountsCreate(deps))
+		pr.Post("/accounts/rename", accountsRename(deps))
+		pr.Post("/accounts/archive", accountsArchive(deps))
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -161,6 +176,115 @@ func renderExchangeRates(deps Deps, w http.ResponseWriter, req *http.Request, er
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.ExchangeRatesPage(shellData(deps, req.Context(), "settings"), rows, codes, errMsg).Render(req.Context(), w)
+}
+
+func accountsForm(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderAccounts(deps, w, req, showArchived(req), "", http.StatusOK)
+	}
+}
+
+func accountsCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		name := req.PostFormValue("name")
+		typ := account.AccountType(req.PostFormValue("type"))
+		currency := money.Currency(req.PostFormValue("currency"))
+		if _, err := deps.Accounts.Create(req.Context(), name, typ, currency); err != nil {
+			renderAccounts(deps, w, req, false, "Could not create account: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/accounts", http.StatusSeeOther)
+	}
+}
+
+func accountsRename(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderAccounts(deps, w, req, showArchived(req), "Invalid account id.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Accounts.Rename(req.Context(), id, req.PostFormValue("name")); err != nil {
+			renderAccounts(deps, w, req, showArchived(req), "Could not rename account: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
+	}
+}
+
+func accountsArchive(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderAccounts(deps, w, req, showArchived(req), "Invalid account id.", http.StatusBadRequest)
+			return
+		}
+		archived := req.PostFormValue("archived") == "true"
+		if err := deps.Accounts.SetArchived(req.Context(), id, archived); err != nil {
+			renderAccounts(deps, w, req, showArchived(req), "Could not update account: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
+	}
+}
+
+// showArchived reports whether the request asks to include archived accounts,
+// reading "?show=archived" (GET) or a "show=archived" form field (POST).
+func showArchived(req *http.Request) bool {
+	return req.URL.Query().Get("show") == "archived" || req.PostFormValue("show") == "archived"
+}
+
+// accountsRedirect preserves the archived view across a redirect.
+func accountsRedirect(req *http.Request) string {
+	if showArchived(req) {
+		return "/accounts?show=archived"
+	}
+	return "/accounts"
+}
+
+// balanceLabel names the balance an account type carries. It is presentation
+// only (no financial math); the value is derived in later epics (AD-2, AD-10).
+func balanceLabel(t account.AccountType) string {
+	if t == account.Credit {
+		return "Balance owed"
+	}
+	return "Cash balance"
+}
+
+func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, includeArchived bool, errMsg string, code int) {
+	var rows []web.AccountRow
+	if accts, err := deps.Accounts.List(req.Context(), includeArchived); err == nil {
+		for _, a := range accts {
+			rows = append(rows, web.AccountRow{
+				ID:           a.ID,
+				Name:         a.Name,
+				Type:         string(a.Type),
+				Currency:     string(a.Currency),
+				BalanceLabel: balanceLabel(a.Type),
+				Archived:     a.Archived,
+			})
+		}
+	}
+	types := []string{string(account.Cash), string(account.Credit), string(account.Investment)}
+	var codes []string
+	for _, c := range money.Supported() {
+		codes = append(codes, string(c))
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.AccountsPage(shellData(deps, req.Context(), "accounts"), rows, types, codes, includeArchived, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

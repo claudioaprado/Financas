@@ -11,6 +11,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type Account struct {
+	ID        int64
+	Name      string
+	Type      string
+	Currency  string
+	Archived  bool
+	CreatedAt pgtype.Timestamptz
+}
+
 type AppSetting struct {
 	ID              bool
 	DisplayCurrency string

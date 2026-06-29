@@ -18,6 +18,7 @@ import (
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/config"
 	apphttp "github.com/claudioaprado/financas/internal/http"
+	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/auth"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/settings"
@@ -69,6 +70,7 @@ func main() {
 			Ready:         pool.Ping,
 			Settings:      settings.New(pool),
 			ExchangeRates: exchangerate.New(pool),
+			Accounts:      account.New(pool),
 			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
