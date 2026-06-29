@@ -19,6 +19,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
+	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 )
 
@@ -367,6 +368,41 @@ func stubImportResult(content string) importer.Result {
 	return res
 }
 
+// stubSecurities is an in-memory Securities for handler tests. It normalizes the
+// symbol and rejects duplicates case-insensitively, mirroring the real service.
+type stubSecurities struct {
+	secs   []security.Security
+	nextID int64
+}
+
+func (s *stubSecurities) Create(_ context.Context, symbol, name string, typ security.SecurityType, quote money.Currency) (security.Security, error) {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	name = strings.TrimSpace(name)
+	if symbol == "" {
+		return security.Security{}, security.ErrEmptySymbol
+	}
+	if name == "" {
+		return security.Security{}, security.ErrEmptyName
+	}
+	if !typ.IsValid() {
+		return security.Security{}, security.ErrInvalidType
+	}
+	if !money.IsSupported(quote) {
+		return security.Security{}, security.ErrUnsupportedCurrency
+	}
+	for _, existing := range s.secs {
+		if existing.Symbol == symbol {
+			return security.Security{}, security.ErrDuplicateSymbol
+		}
+	}
+	s.nextID++
+	sec := security.Security{ID: s.nextID, Symbol: symbol, Name: name, Type: typ, QuoteCurrency: quote}
+	s.secs = append(s.secs, sec)
+	return sec, nil
+}
+
+func (s *stubSecurities) List(_ context.Context) ([]security.Security, error) { return s.secs, nil }
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -379,6 +415,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Accounts:      &stubAccounts{},
 		Transactions:  &stubTransactions{},
 		Categories:    &stubCategories{usage: map[int64]int64{}},
+		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
 	}
@@ -895,6 +932,57 @@ func TestCategoriesPageAndGuardedDelete(t *testing.T) {
 	if b := body("/categories"); strings.Contains(b, "Food") {
 		t.Errorf("category should be gone after force delete")
 	}
+}
+
+func TestSecuritiesPage(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Securities = &stubSecurities{}
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	body := func(path string) string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/securities", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth GET /securities = %d, want 303", recUnauth.Code)
+	}
+
+	// Create a security and see it listed (symbol upper-cased, ETF label rendered).
+	post("/securities", "symbol=voo&name=Vanguard+S%26P+500+ETF&type=etf&quote_currency=USD", http.StatusSeeOther)
+	if b := body("/securities"); !strings.Contains(b, "VOO") || !strings.Contains(b, "ETF") {
+		t.Errorf("securities page missing the created security")
+	}
+
+	// Duplicate symbol (case-insensitive) is rejected and adds no second row.
+	post("/securities", "symbol=Voo&name=Dup&type=stock&quote_currency=USD", http.StatusBadRequest)
+	if b := body("/securities"); strings.Count(b, "VOO") != 1 {
+		t.Errorf("duplicate symbol should not add a second row")
+	}
+
+	// Unsupported currency is rejected.
+	post("/securities", "symbol=PETR4&name=Petrobras&type=stock&quote_currency=EUR", http.StatusBadRequest)
 }
 
 func TestTransactionsRegister(t *testing.T) {

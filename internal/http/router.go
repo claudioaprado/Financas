@@ -26,6 +26,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
+	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/web"
 )
@@ -88,6 +89,13 @@ type Categories interface {
 	Delete(ctx context.Context, id int64, force bool) error
 }
 
+// Securities creates and lists the owner's securities. Defined here (consumer
+// side) and implemented by service/security.
+type Securities interface {
+	Create(ctx context.Context, symbol, name string, typ security.SecurityType, quote money.Currency) (security.Security, error)
+	List(ctx context.Context) ([]security.Security, error)
+}
+
 // Imports previews and commits tab-delimited file imports. Defined here
 // (consumer side) and implemented by service/importer.
 type Imports interface {
@@ -105,6 +113,7 @@ type Deps struct {
 	Accounts      Accounts
 	Transactions  Transactions
 	Categories    Categories
+	Securities    Securities
 	Imports       Imports
 	OwnerName     string // shown in the shell greeting (from config)
 }
@@ -171,6 +180,8 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/categories", categoriesCreate(deps))
 		pr.Post("/categories/delete", categoriesDelete(deps))
 		pr.Get("/categories/{id}", categorySummary(deps))
+		pr.Get("/securities", securitiesPage(deps))
+		pr.Post("/securities", securitiesCreate(deps))
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -708,6 +719,71 @@ func categorySummary(deps Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = web.CategorySummaryPage(shellData(deps, req.Context(), "settings"), name, kind, rows, totals).Render(req.Context(), w)
 	}
+}
+
+func securitiesPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderSecurities(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func securitiesCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		symbol := req.PostFormValue("symbol")
+		name := req.PostFormValue("name")
+		typ := security.SecurityType(req.PostFormValue("type"))
+		quote := money.Currency(req.PostFormValue("quote_currency"))
+		if _, err := deps.Securities.Create(req.Context(), symbol, name, typ, quote); err != nil {
+			renderSecurities(deps, w, req, "Could not add security: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/securities", http.StatusSeeOther)
+	}
+}
+
+// securityTypeLabel renders a stored (lowercase) security type for display.
+func securityTypeLabel(t security.SecurityType) string {
+	switch t {
+	case security.ETF:
+		return "ETF"
+	case security.Stock:
+		return "Stock"
+	case security.Fund:
+		return "Fund"
+	default:
+		return "Other"
+	}
+}
+
+func renderSecurities(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var rows []web.SecurityRow
+	if secs, err := deps.Securities.List(req.Context()); err == nil {
+		for _, s := range secs {
+			rows = append(rows, web.SecurityRow{
+				Symbol:        s.Symbol,
+				Name:          s.Name,
+				TypeLabel:     securityTypeLabel(s.Type),
+				QuoteCurrency: string(s.QuoteCurrency),
+			})
+		}
+	}
+	types := []web.SecurityTypeOption{
+		{Value: string(security.Stock), Label: "Stock"},
+		{Value: string(security.ETF), Label: "ETF"},
+		{Value: string(security.Fund), Label: "Fund"},
+		{Value: string(security.Other), Label: "Other"},
+	}
+	var codes []string
+	for _, c := range money.Supported() {
+		codes = append(codes, string(c))
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.SecuritiesPage(shellData(deps, req.Context(), "settings"), rows, types, codes, errMsg).Render(req.Context(), w)
 }
 
 // parsePathID reads the numeric {id} path parameter.

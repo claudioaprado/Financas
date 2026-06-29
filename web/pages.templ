@@ -43,6 +43,7 @@ templ SettingsPage(data ShellData, currencies []string) {
 			</form>
 			<p class="mt-4 text-sm"><a href="/exchange-rates" class="text-accent hover:underline">Manage exchange rates →</a></p>
 			<p class="mt-1 text-sm"><a href="/categories" class="text-accent hover:underline">Manage categories →</a></p>
+			<p class="mt-1 text-sm"><a href="/securities" class="text-accent hover:underline">Manage securities →</a></p>
 		</section>
 	}
 }
@@ -417,6 +418,72 @@ templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRo
 							<td>{ tr.Account }</td>
 							<td>{ tr.Description }</td>
 							<td class="text-right">{ tr.Amount }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// SecuritiesPage lists the owner's securities and a create form (Story 4.1). A
+// security has a symbol, name, type (stock | ETF | fund | other), and the
+// currency it is quoted in. Duplicate symbols are prevented case-insensitively.
+// Trades, holdings, prices, and valuation are built in later Epic 4 stories.
+templ SecuritiesPage(data ShellData, securities []SecurityRow, types []SecurityTypeOption, currencies []string, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Securities</h1>
+			<p class="mt-1 text-sm text-muted">The instruments you trade. Each has a symbol, a name, a type, and the currency it is quoted in. You can record buys, sells, and dividends against them in later steps.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<form method="post" action="/securities" class="mt-4 flex flex-wrap items-end gap-2">
+				<div>
+					<label class="block text-xs" for="symbol">Symbol</label>
+					<input id="symbol" name="symbol" required class="w-32 rounded border px-2 py-1"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="name">Name</label>
+					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="type">Type</label>
+					<select id="type" name="type" class="rounded border px-2 py-1">
+						for _, t := range types {
+							<option value={ t.Value }>{ t.Label }</option>
+						}
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs" for="quote_currency">Quote currency</label>
+					<select id="quote_currency" name="quote_currency" class="rounded border px-2 py-1">
+						for _, c := range currencies {
+							<option value={ c }>{ c }</option>
+						}
+					</select>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Add security</button>
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Symbol</th>
+						<th>Name</th>
+						<th>Type</th>
+						<th class="text-right">Quote currency</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(securities) == 0 {
+						<tr><td colspan="4" class="py-2 text-muted">No securities yet.</td></tr>
+					}
+					for _, s := range securities {
+						<tr class="border-t border-black/5">
+							<td class="py-1 font-medium">{ s.Symbol }</td>
+							<td>{ s.Name }</td>
+							<td>{ s.TypeLabel }</td>
+							<td class="text-right">{ s.QuoteCurrency }</td>
 						</tr>
 					}
 				</tbody>

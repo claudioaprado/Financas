@@ -166,6 +166,13 @@ in the service). A category's summary page lists its transactions and a total
 are guarded: a category in use can't be removed until you reassign its
 transactions, or use **delete and unassign**, which clears it from them first.
 
+**Securities** (`/securities`, linked from Settings) are the instruments you
+trade — each with a symbol, name, type (stock / ETF / fund / other), and the
+currency it is quoted in. Symbols are stored upper-cased and must be unique, so a
+duplicate is rejected case-insensitively at entry (`petr4` and `PETR4` are the
+same symbol). This is the registry that investment transactions, derived
+holdings, prices, and valuation build on in the rest of Epic 4.
+
 **The register** (`/transactions`) lists every account's transactions
 newest-first, with signed colored amounts (green income / red expense; transfers
 neutral, shown as `from → to`) and type/Category badges (UX-DR5). Filter by

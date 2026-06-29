@@ -46,6 +46,15 @@ type ExchangeRate struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Security struct {
+	ID            int64
+	Symbol        string
+	Name          string
+	Type          string
+	QuoteCurrency string
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Transaction struct {
 	ID            int64
 	Type          string

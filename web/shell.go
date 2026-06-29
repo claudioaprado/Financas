@@ -99,6 +99,21 @@ type ImportRow struct {
 	Raw         string
 }
 
+// SecurityTypeOption is one security-type choice in the create form (value is
+// stored lowercase, label is display-cased).
+type SecurityTypeOption struct {
+	Value string
+	Label string
+}
+
+// SecurityRow is one security on the securities page.
+type SecurityRow struct {
+	Symbol        string
+	Name          string
+	TypeLabel     string
+	QuoteCurrency string
+}
+
 // FilterOption is one <option> in a register filter dropdown.
 type FilterOption struct {
 	ID    int64
