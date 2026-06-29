@@ -316,6 +316,163 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 	}
 }
 
+// InvestmentAccountDetailPage shows an investment account (Story 4.2): cash
+// balance, derived read-only holdings (average-cost), buy/sell/dividend forms, and
+// the account's investment transactions. Holdings are derived on read (AD-2);
+// trades are corrected via delete + re-add (no in-place edit), like transfers.
+templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, cashBalance, errMsg string, holdings []HoldingRow, realizedGain string, oversold bool, securities []SecurityChoice, txns []TxRow) {
+	@Shell(data) {
+		<section class="max-w-4xl rounded-card bg-white p-6 shadow-card">
+			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
+			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
+			<p class="text-sm text-muted">investment · { currency }</p>
+			<div class="mt-4">
+				<p class="text-sm text-muted">Cash balance</p>
+				<p class="text-3xl font-bold">{ cashBalance }</p>
+			</div>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<h2 class="mt-6 text-sm font-semibold text-muted">Holdings</h2>
+			if oversold {
+				<p class="mt-2 text-loss">A sell exceeds the quantity held — delete or fix the offending trade below so holdings can be derived.</p>
+			} else {
+				<table class="mt-2 w-full text-sm">
+					<thead>
+						<tr class="text-left text-muted">
+							<th class="py-1">Security</th>
+							<th class="text-right">Quantity</th>
+							<th class="text-right">Avg cost</th>
+							<th class="text-right">Cost basis</th>
+							<th class="text-right">Realized G/L</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(holdings) == 0 {
+							<tr><td colspan="5" class="py-2 text-muted">No open positions.</td></tr>
+						}
+						for _, h := range holdings {
+							<tr class="border-t border-black/5">
+								<td class="py-1 font-medium">{ h.Symbol } <span class="text-muted">{ h.Name }</span></td>
+								<td class="text-right">{ h.Quantity }</td>
+								<td class="text-right">{ h.AvgCost }</td>
+								<td class="text-right">{ h.CostBasis }</td>
+								<td class="text-right">{ h.RealizedGain }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				if realizedGain != "" {
+					<p class="mt-2 text-sm text-muted">Cumulative realized gain/loss: <span class="font-semibold">{ realizedGain }</span></p>
+				}
+			}
+			if len(securities) == 0 {
+				<p class="mt-6 text-sm text-muted">Add a { currency } security under <a href="/securities" class="text-accent hover:underline">Securities</a> to trade here.</p>
+			} else {
+				<h2 class="mt-6 text-sm font-semibold text-muted">Buy</h2>
+				@tradeForm(acctID, "buy", "Buy", securities)
+				<h2 class="mt-4 text-sm font-semibold text-muted">Sell</h2>
+				@tradeForm(acctID, "sell", "Sell", securities)
+				<h2 class="mt-4 text-sm font-semibold text-muted">Dividend</h2>
+				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/dividend") } class="mt-2 flex flex-wrap items-end gap-2">
+					<div>
+						<label class="block text-xs" for="div_security">Security</label>
+						<select id="div_security" name="security_id" class="rounded border px-2 py-1">
+							for _, s := range securities {
+								<option value={ accountID(s.ID) }>{ s.Symbol }</option>
+							}
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs" for="div_amount">Amount ({ currency })</label>
+						<input id="div_amount" name="amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="div_date">Date</label>
+						<input id="div_date" name="date" type="date" required class="rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="div_desc">Description</label>
+						<input id="div_desc" name="description" class="w-48 rounded border px-2 py-1"/>
+					</div>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Record dividend</button>
+				</form>
+			}
+			<h2 class="mt-6 text-sm font-semibold text-muted">Transactions</h2>
+			<table class="mt-2 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Date</th>
+						<th>Type</th>
+						<th>Security</th>
+						<th class="text-right">Qty</th>
+						<th class="text-right">Price</th>
+						<th class="text-right">Cash</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(txns) == 0 {
+						<tr><td colspan="7" class="py-2 text-muted">No transactions yet.</td></tr>
+					}
+					for _, tr := range txns {
+						<tr class="border-t border-black/5">
+							<td class="py-1">{ tr.Date }</td>
+							<td>{ tr.Type }</td>
+							<td>{ tr.Security }</td>
+							<td class="text-right">{ tr.Quantity }</td>
+							<td class="text-right">{ tr.Price }</td>
+							<td class={ "text-right", templ.KV("text-gain", tr.Incoming), templ.KV("text-loss", !tr.Incoming) }>{ tr.Signed }</td>
+							<td>
+								<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/delete") } class="flex justify-end">
+									<input type="hidden" name="tx_id" value={ accountID(tr.ID) }/>
+									<button class="rounded border px-2 py-1" type="submit">Delete</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// tradeForm renders a shared buy/sell entry form (security, quantity, price,
+// fees, date) posting to the given action path.
+templ tradeForm(acctID int64, action, label string, securities []SecurityChoice) {
+	<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/" + action) } class="mt-2 flex flex-wrap items-end gap-2">
+		<div>
+			<label class="block text-xs">Security</label>
+			<select name="security_id" class="rounded border px-2 py-1">
+				for _, s := range securities {
+					<option value={ accountID(s.ID) }>{ s.Symbol }</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs">Quantity</label>
+			<input name="quantity" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
+		</div>
+		<div>
+			<label class="block text-xs">Price</label>
+			<input name="price" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
+		</div>
+		<div>
+			<label class="block text-xs">Fees</label>
+			<input name="fees" inputmode="decimal" placeholder="0" class="w-20 rounded border px-2 py-1"/>
+		</div>
+		<div>
+			<label class="block text-xs">Date</label>
+			<input name="date" type="date" required class="rounded border px-2 py-1"/>
+		</div>
+		<div>
+			<label class="block text-xs">Description</label>
+			<input name="description" class="w-40 rounded border px-2 py-1"/>
+		</div>
+		<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">{ label }</button>
+	</form>
+}
+
 // CategoriesPage manages income/expense categories (Story 3.4): a create form
 // and a list with usage counts and guarded delete (a category in use offers a
 // "delete and unassign" action).

@@ -38,7 +38,7 @@ func TestSecurity(t *testing.T) {
 
 	svc := New(pool)
 	run := time.Now().UnixNano()
-	sym := fmt.Sprintf("PETR%d", run%100000)
+	sym := fmt.Sprintf("PETR%d", run)
 
 	// Create + the stored row is normalized.
 	sec, err := svc.Create(ctx, "  "+sym+"  ", "Petrobras PN", Stock, money.BRL)
@@ -89,7 +89,7 @@ func TestSecurity(t *testing.T) {
 	}
 
 	// A second, distinct security lists, ordered by symbol.
-	voo := fmt.Sprintf("AAA%d", run%100000)
+	voo := fmt.Sprintf("AAA%d", run)
 	if _, err := svc.Create(ctx, voo, "Vanguard S&P 500 ETF", ETF, money.USD); err != nil {
 		t.Fatalf("create second security: %v", err)
 	}

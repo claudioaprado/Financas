@@ -173,6 +173,19 @@ duplicate is rejected case-insensitively at entry (`petr4` and `PETR4` are the
 same symbol). This is the registry that investment transactions, derived
 holdings, prices, and valuation build on in the rest of Epic 4.
 
+**Investment transactions** (on an investment account's detail page) record
+**Buy**, **Sell**, and **Dividend** against a security. A buy debits the account's
+cash by `quantity×price + fees` and grows the holding's cost basis by the same; a
+sell credits cash by `quantity×price − fees` (fees reduce proceeds, not basis),
+reduces the basis proportionally (average-cost), and realizes a gain/loss; a
+dividend credits cash and leaves the holding untouched. **Holdings** (quantity,
+average cost, cost basis, realized G/L) are **derived on read** from the ledger —
+never stored, never edited directly; selling the whole position wipes the basis
+exactly, and an oversell is rejected. A security can only be traded in an account
+of the **same currency** (no FX inside a trade). Trades are corrected via delete +
+re-add (no in-place edit). Market value / unrealized gain arrive with prices
+(Story 4.3) and the portfolio dashboard (4.4).
+
 **The register** (`/transactions`) lists every account's transactions
 newest-first, with signed colored amounts (green income / red expense; transfers
 neutral, shown as `from → to`) and type/Category badges (UX-DR5). Filter by

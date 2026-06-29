@@ -67,4 +67,8 @@ type Transaction struct {
 	CreatedAt     pgtype.Timestamptz
 	CategoryID    pgtype.Int8
 	ImportHash    pgtype.Text
+	SecurityID    pgtype.Int8
+	Quantity      decimal.Decimal
+	Price         decimal.Decimal
+	Fees          decimal.Decimal
 }

@@ -47,9 +47,9 @@ func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImpor
 }
 
 const createTransaction = `-- name: CreateTransaction :one
-INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, category_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, category_id, security_id, quantity, price, fees)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
 `
 
 type CreateTransactionParams struct {
@@ -61,6 +61,10 @@ type CreateTransactionParams struct {
 	OccurredOn    time.Time
 	Description   string
 	CategoryID    pgtype.Int8
+	SecurityID    pgtype.Int8
+	Quantity      decimal.Decimal
+	Price         decimal.Decimal
+	Fees          decimal.Decimal
 }
 
 func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error) {
@@ -73,6 +77,10 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		arg.OccurredOn,
 		arg.Description,
 		arg.CategoryID,
+		arg.SecurityID,
+		arg.Quantity,
+		arg.Price,
+		arg.Fees,
 	)
 	var i Transaction
 	err := row.Scan(
@@ -87,6 +95,10 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.CreatedAt,
 		&i.CategoryID,
 		&i.ImportHash,
+		&i.SecurityID,
+		&i.Quantity,
+		&i.Price,
+		&i.Fees,
 	)
 	return i, err
 }
@@ -130,7 +142,7 @@ func (q *Queries) ListAccountImportHashes(ctx context.Context, fromAccountID pgt
 }
 
 const listAccountTransactions = `-- name: ListAccountTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
 FROM transaction
 WHERE from_account_id = $1 OR to_account_id = $1
 ORDER BY occurred_on DESC, id DESC
@@ -157,6 +169,10 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 			&i.CreatedAt,
 			&i.CategoryID,
 			&i.ImportHash,
+			&i.SecurityID,
+			&i.Quantity,
+			&i.Price,
+			&i.Fees,
 		); err != nil {
 			return nil, err
 		}
@@ -169,7 +185,7 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
 FROM transaction
 ORDER BY occurred_on DESC, id DESC
 `
@@ -195,6 +211,10 @@ func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
 			&i.CreatedAt,
 			&i.CategoryID,
 			&i.ImportHash,
+			&i.SecurityID,
+			&i.Quantity,
+			&i.Price,
+			&i.Fees,
 		); err != nil {
 			return nil, err
 		}

@@ -7,6 +7,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -78,6 +79,11 @@ type Transactions interface {
 	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
 	CategoryTransactions(ctx context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error)
 	Register(ctx context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error)
+	// Investment trades (Story 4.2).
+	Buy(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
+	Sell(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
+	Dividend(ctx context.Context, accountID, securityID int64, amount decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
+	Holdings(ctx context.Context, accountID int64) ([]transaction.HoldingView, money.Money, error)
 }
 
 // Categories creates, lists, and deletes income/expense categories. Defined here
@@ -173,6 +179,9 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
 		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
 		pr.Post("/accounts/{id}/transfer", txTransfer(deps))
+		pr.Post("/accounts/{id}/buy", tradeBuy(deps))
+		pr.Post("/accounts/{id}/sell", tradeSell(deps))
+		pr.Post("/accounts/{id}/dividend", tradeDividend(deps))
 		pr.Get("/accounts/{id}/import", importForm(deps))
 		pr.Post("/accounts/{id}/import/preview", importPreview(deps))
 		pr.Post("/accounts/{id}/import/commit", importCommit(deps))
@@ -464,6 +473,98 @@ func txTransfer(deps Deps) http.HandlerFunc {
 	}
 }
 
+func tradeBuy(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		secID, qty, price, fees, date, ok := parseTradeForm(req)
+		if !ok {
+			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid quantity, price, and date.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Transactions.Buy(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not record buy: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+func tradeSell(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		secID, qty, price, fees, date, ok := parseTradeForm(req)
+		if !ok {
+			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid quantity, price, and date.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Transactions.Sell(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not record sell: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+func tradeDividend(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		secID, sErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
+		amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
+		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
+		if sErr != nil || aErr != nil || dErr != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid amount, and a date.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Transactions.Dividend(req.Context(), acctID, secID, amount, date, req.PostFormValue("description")); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not record dividend: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
+// parseTradeForm parses the shared buy/sell form (security_id, quantity, price,
+// fees, date). Amounts are decimal strings, never floats (AD-4). Fees default to
+// 0 when blank.
+func parseTradeForm(req *http.Request) (securityID int64, quantity, price, fees decimal.Decimal, date time.Time, ok bool) {
+	if err := req.ParseForm(); err != nil {
+		return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
+	}
+	secID, sErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
+	qty, qErr := decimal.NewFromString(req.PostFormValue("quantity"))
+	pr, pErr := decimal.NewFromString(req.PostFormValue("price"))
+	dt, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
+	if sErr != nil || qErr != nil || pErr != nil || dErr != nil {
+		return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
+	}
+	feeStr := strings.TrimSpace(req.PostFormValue("fees"))
+	feeAmt := decimal.Zero
+	if feeStr != "" {
+		f, err := decimal.NewFromString(feeStr)
+		if err != nil {
+			return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
+		}
+		feeAmt = f
+	}
+	return secID, qty, pr, feeAmt, dt, true
+}
+
 func importForm(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		acctID, ok := parsePathID(req)
@@ -577,6 +678,7 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 				Type:        string(r.Type),
 				Description: r.Description,
 				Category:    r.Category,
+				Security:    r.Security,
 				Account:     r.Account,
 				Amount:      registerAmount(r),
 				Incoming:    r.Incoming,
@@ -817,6 +919,10 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		http.NotFound(w, req)
 		return
 	}
+	if account.AccountType(acct.Type) == account.Investment {
+		renderInvestmentDetail(deps, w, req, acct, errMsg, code)
+		return
+	}
 	// Credit accounts present their balance as a positive amount owed (a
 	// liability); cash/investment show the signed balance. The owed figure is
 	// produced by domain (AD-10) — http only renders it.
@@ -888,6 +994,72 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, cats, rows, editing, edit, targets, errMsg).Render(req.Context(), w)
+}
+
+// renderInvestmentDetail renders an investment account's page: cash balance,
+// derived holdings (read-only, AD-2), trade forms (buy/sell/dividend), and the
+// account's investment transaction list. Trades are corrected via delete + re-add
+// (no in-place edit), mirroring transfers.
+func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request, acct account.Account, errMsg string, code int) {
+	balStr := ""
+	if bal, bErr := deps.Transactions.Balance(req.Context(), acct.ID); bErr == nil {
+		balStr = bal.String()
+	}
+
+	var holdings []web.HoldingRow
+	realized := ""
+	oversold := false
+	if hs, rg, hErr := deps.Transactions.Holdings(req.Context(), acct.ID); hErr != nil {
+		oversold = errors.Is(hErr, transaction.ErrOversold)
+	} else {
+		for _, h := range hs {
+			holdings = append(holdings, web.HoldingRow{
+				Symbol:       h.Symbol,
+				Name:         h.Name,
+				Quantity:     h.Quantity.String(),
+				AvgCost:      h.AvgCost.String(),
+				CostBasis:    h.CostBasis.String(),
+				RealizedGain: h.RealizedGain.String(),
+			})
+		}
+		realized = rg.String()
+	}
+
+	var rows []web.TxRow
+	if txns, lErr := deps.Transactions.List(req.Context(), acct.ID); lErr == nil {
+		for _, t := range txns {
+			sign := "-"
+			if t.Incoming {
+				sign = "+"
+			}
+			rows = append(rows, web.TxRow{
+				ID:          t.ID,
+				Type:        string(t.Type),
+				Date:        t.Date.Format("2006-01-02"),
+				Description: t.Description,
+				Security:    t.Security,
+				Quantity:    t.Quantity.String(),
+				Price:       t.Price.String(),
+				Signed:      sign + money.New(t.Amount, acct.Currency).String(),
+				Incoming:    t.Incoming,
+				Editable:    false, // trades corrected via delete + re-add
+			})
+		}
+	}
+
+	// Tradeable securities: same currency as the account (same-currency-only).
+	var securities []web.SecurityChoice
+	if secs, sErr := deps.Securities.List(req.Context()); sErr == nil {
+		for _, s := range secs {
+			if string(s.QuoteCurrency) == string(acct.Currency) {
+				securities = append(securities, web.SecurityChoice{ID: s.ID, Symbol: s.Symbol})
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.InvestmentAccountDetailPage(shellData(deps, req.Context(), "accounts"), acct.ID, acct.Name, string(acct.Currency), balStr, errMsg, holdings, realized, oversold, securities, rows).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

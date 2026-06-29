@@ -147,6 +147,89 @@ func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.
 type stubTransactions struct {
 	rows   []transaction.Transaction
 	nextID int64
+	held   map[int64]*stubHolding // by security id
+}
+
+type stubHolding struct {
+	qty, basis, realized decimal.Decimal
+}
+
+func (s *stubTransactions) hold(securityID int64) *stubHolding {
+	if s.held == nil {
+		s.held = map[int64]*stubHolding{}
+	}
+	h, ok := s.held[securityID]
+	if !ok {
+		h = &stubHolding{}
+		s.held[securityID] = h
+	}
+	return h
+}
+
+func (s *stubTransactions) Buy(_ context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, desc string) (transaction.Transaction, error) {
+	if !quantity.IsPositive() {
+		return transaction.Transaction{}, transaction.ErrNonPositiveQuantity
+	}
+	cost := quantity.Mul(price).Add(fees)
+	s.nextID++
+	t := transaction.Transaction{ID: s.nextID, Type: transaction.Buy, AccountID: accountID, Amount: cost, Incoming: false, SecurityID: securityID, Security: fmt.Sprintf("S%d", securityID), Quantity: quantity, Price: price, Date: date, Description: desc}
+	s.rows = append(s.rows, t)
+	h := s.hold(securityID)
+	h.qty = h.qty.Add(quantity)
+	h.basis = h.basis.Add(cost)
+	return t, nil
+}
+
+func (s *stubTransactions) Sell(_ context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, desc string) (transaction.Transaction, error) {
+	if !quantity.IsPositive() {
+		return transaction.Transaction{}, transaction.ErrNonPositiveQuantity
+	}
+	h := s.hold(securityID)
+	if quantity.GreaterThan(h.qty) {
+		return transaction.Transaction{}, transaction.ErrOversold
+	}
+	bs := h.basis
+	if !quantity.Equal(h.qty) {
+		bs = h.basis.Mul(quantity.Div(h.qty)).RoundBank(money.MoneyScale)
+	}
+	proceeds := quantity.Mul(price).Sub(fees)
+	h.realized = h.realized.Add(proceeds.Sub(bs))
+	h.basis = h.basis.Sub(bs)
+	h.qty = h.qty.Sub(quantity)
+	s.nextID++
+	t := transaction.Transaction{ID: s.nextID, Type: transaction.Sell, AccountID: accountID, Amount: proceeds, Incoming: true, SecurityID: securityID, Security: fmt.Sprintf("S%d", securityID), Quantity: quantity, Price: price, Date: date, Description: desc}
+	s.rows = append(s.rows, t)
+	return t, nil
+}
+
+func (s *stubTransactions) Dividend(_ context.Context, accountID, securityID int64, amount decimal.Decimal, date time.Time, desc string) (transaction.Transaction, error) {
+	if !amount.IsPositive() {
+		return transaction.Transaction{}, transaction.ErrNonPositiveAmount
+	}
+	s.nextID++
+	t := transaction.Transaction{ID: s.nextID, Type: transaction.Dividend, AccountID: accountID, Amount: amount, Incoming: true, SecurityID: securityID, Security: fmt.Sprintf("S%d", securityID), Date: date, Description: desc}
+	s.rows = append(s.rows, t)
+	return t, nil
+}
+
+func (s *stubTransactions) Holdings(_ context.Context, _ int64) ([]transaction.HoldingView, money.Money, error) {
+	realized := decimal.Zero
+	var out []transaction.HoldingView
+	for id, h := range s.held {
+		realized = realized.Add(h.realized)
+		if !h.qty.IsPositive() {
+			continue
+		}
+		out = append(out, transaction.HoldingView{
+			SecurityID:   id,
+			Symbol:       fmt.Sprintf("S%d", id),
+			Quantity:     h.qty,
+			AvgCost:      money.New(h.basis.Div(h.qty), money.USD).Rounded(),
+			CostBasis:    money.New(h.basis, money.USD),
+			RealizedGain: money.New(h.realized, money.USD),
+		})
+	}
+	return out, money.New(realized, money.USD), nil
 }
 
 func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, categoryID int64) (transaction.Transaction, error) {
@@ -987,6 +1070,55 @@ func TestSecuritiesPage(t *testing.T) {
 	post("/securities", "symbol=PETR4&name=Petrobras&type=stock&quote_currency=EUR", http.StatusBadRequest)
 	if b := body("/securities"); strings.Contains(b, "PETR4") {
 		t.Errorf("a security with an unsupported currency must not be persisted")
+	}
+}
+
+func TestInvestmentAccountDetail(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	body := func(path string) string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	// An investment account (id 1) renders the holdings/trade UI, not the
+	// income/expense form.
+	post("/accounts", "name=Broker&type=investment&currency=USD", http.StatusSeeOther)
+	if b := body("/accounts/1"); !strings.Contains(b, "Holdings") || !strings.Contains(b, "Cash balance") {
+		t.Errorf("investment detail missing holdings/cash sections")
+	}
+
+	// Buy 10 @ 5 fee 0 → holding shows; cash goes negative.
+	post("/accounts/1/buy", "security_id=1&quantity=10&price=5&fees=0&date=2026-06-01", http.StatusSeeOther)
+	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
+		t.Errorf("holdings table missing the bought security")
+	}
+
+	// Sell 4 @ 6 → ok. Oversell 999 → rejected (400).
+	post("/accounts/1/sell", "security_id=1&quantity=4&price=6&fees=0&date=2026-06-02", http.StatusSeeOther)
+	post("/accounts/1/sell", "security_id=1&quantity=999&price=6&fees=0&date=2026-06-03", http.StatusBadRequest)
+
+	// Dividend credits cash; holding unchanged (still S1 listed).
+	post("/accounts/1/dividend", "security_id=1&amount=12.50&date=2026-06-04", http.StatusSeeOther)
+	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
+		t.Errorf("holding should remain after dividend")
 	}
 }
 

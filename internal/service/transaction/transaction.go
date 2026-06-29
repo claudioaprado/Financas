@@ -37,6 +37,12 @@ const (
 	Expense TxType = "expense"
 	// Transfer moves value between two of the owner's accounts (one row, AD-9).
 	Transfer TxType = "transfer"
+	// Buy debits the investment account's cash and adds to a holding (Epic 4).
+	Buy TxType = "buy"
+	// Sell credits cash, reduces basis proportionally, realizes gain (Epic 4).
+	Sell TxType = "sell"
+	// Dividend credits cash; quantity and basis are unchanged (Epic 4).
+	Dividend TxType = "dividend"
 )
 
 // IsValid reports whether t is an income or expense — the single-account types
@@ -61,6 +67,16 @@ var (
 	// Category errors (Story 3.4).
 	ErrCategoryNotFound     = errors.New("transaction: category not found")
 	ErrCategoryKindMismatch = errors.New("transaction: category kind must match the transaction type")
+	// Investment-trade errors (Story 4.2).
+	ErrNotInvestmentAccount  = errors.New("transaction: buy/sell/dividend require an investment account")
+	ErrSecurityNotFound      = errors.New("transaction: security not found")
+	ErrTradeCurrencyMismatch = errors.New("transaction: security quote currency must equal the account currency")
+	ErrNonPositiveQuantity   = errors.New("transaction: quantity must be positive")
+	ErrNonPositivePrice      = errors.New("transaction: price must be positive")
+	ErrNegativeFees          = errors.New("transaction: fees must not be negative")
+	ErrNegativeProceeds      = errors.New("transaction: fees exceed gross proceeds")
+	// ErrOversold means a sell exceeds the quantity held (domain.ErrOversold).
+	ErrOversold = errors.New("transaction: sell exceeds holdings")
 )
 
 // Transaction is one row formatted for a specific account's register. Amount is
@@ -77,6 +93,10 @@ type Transaction struct {
 	Counterparty string
 	CategoryID   int64  // 0 when uncategorized
 	CategoryName string // resolved for display
+	SecurityID   int64  // 0 when not a trade
+	Security     string // resolved symbol for trade rows
+	Quantity     decimal.Decimal
+	Price        decimal.Decimal
 	Date         time.Time
 	Description  string
 	CreatedAt    time.Time
@@ -120,6 +140,10 @@ func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amoun
 		OccurredOn:    date,
 		Description:   description,
 		CategoryID:    catID,
+		SecurityID:    pgtype.Int8{},
+		Quantity:      decimal.Zero,
+		Price:         decimal.Zero,
+		Fees:          decimal.Zero,
 	})
 	if err != nil {
 		return Transaction{}, fmt.Errorf("transaction: insert: %w", err)
@@ -127,7 +151,7 @@ func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amoun
 	if err := tx.Commit(ctx); err != nil {
 		return Transaction{}, fmt.Errorf("transaction: commit: %w", err)
 	}
-	return toTransaction(accountID, row, nil, nil), nil // income/expense: no counterpart
+	return toTransaction(accountID, row, nil, nil, nil), nil // income/expense: no counterpart
 }
 
 // Edit updates an existing income/expense on the given cash account. The from/to
@@ -247,6 +271,10 @@ func (s *Service) Transfer(ctx context.Context, fromID, toID int64, fromAmount, 
 		OccurredOn:    date,
 		Description:   description,
 		CategoryID:    pgtype.Int8{}, // transfers are never categorized
+		SecurityID:    pgtype.Int8{},
+		Quantity:      decimal.Zero,
+		Price:         decimal.Zero,
+		Fees:          decimal.Zero,
 	}); err != nil {
 		return fmt.Errorf("transaction: insert transfer: %w", err)
 	}
@@ -254,6 +282,292 @@ func (s *Service) Transfer(ctx context.Context, fromID, toID int64, fromAmount, 
 		return fmt.Errorf("transaction: commit: %w", err)
 	}
 	return nil
+}
+
+// validateTrade loads the account and security for a buy/sell/dividend and
+// enforces the invariants shared by all three: the account must be an investment
+// account, the security must exist, and (same-currency-only, Epic 4 decision) the
+// security's quote currency must equal the account's currency. Securities are
+// read via store (not service/security) per the store-not-service rule (AD-1).
+func (s *Service) validateTrade(ctx context.Context, accountID, securityID int64) (store.Account, store.Security, error) {
+	q := store.New(s.pool)
+	acct, err := q.GetAccount(ctx, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Account{}, store.Security{}, ErrAccountNotFound
+	}
+	if err != nil {
+		return store.Account{}, store.Security{}, fmt.Errorf("transaction: get account: %w", err)
+	}
+	if acct.Type != "investment" {
+		return store.Account{}, store.Security{}, ErrNotInvestmentAccount
+	}
+	sec, err := q.GetSecurity(ctx, securityID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Account{}, store.Security{}, ErrSecurityNotFound
+	}
+	if err != nil {
+		return store.Account{}, store.Security{}, fmt.Errorf("transaction: get security: %w", err)
+	}
+	if sec.QuoteCurrency != acct.Currency {
+		return store.Account{}, store.Security{}, ErrTradeCurrencyMismatch
+	}
+	return acct, sec, nil
+}
+
+// Buy records a purchase: it debits the account's cash by quantity×price + fees
+// (one row, from-leg) and grows the holding's quantity and cost basis by the same
+// (derived on read). It writes inside one transaction (AD-3).
+func (s *Service) Buy(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (Transaction, error) {
+	if _, _, err := s.validateTrade(ctx, accountID, securityID); err != nil {
+		return Transaction{}, err
+	}
+	if !quantity.IsPositive() {
+		return Transaction{}, ErrNonPositiveQuantity
+	}
+	if !price.IsPositive() {
+		return Transaction{}, ErrNonPositivePrice
+	}
+	if fees.IsNegative() {
+		return Transaction{}, ErrNegativeFees
+	}
+	cost := quantity.Mul(price).Add(fees)
+	row, err := s.insertTrade(ctx, store.CreateTransactionParams{
+		Type:          string(Buy),
+		FromAccountID: idParam(accountID),
+		FromAmount:    cost,
+		ToAmount:      decimal.Zero,
+		OccurredOn:    date,
+		Description:   description,
+		SecurityID:    idParam(securityID),
+		Quantity:      quantity,
+		Price:         price,
+		Fees:          fees,
+	})
+	if err != nil {
+		return Transaction{}, err
+	}
+	return toTransaction(accountID, row, nil, nil, nil), nil
+}
+
+// Sell records a sale: it credits the account's cash by quantity×price − fees
+// (fees reduce proceeds, not basis — Epic 4 decision), reduces the holding's
+// basis proportionally, and realizes gain (all derived on read). It rejects an
+// oversell (selling more than currently held). One transaction (AD-3).
+func (s *Service) Sell(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (Transaction, error) {
+	if _, _, err := s.validateTrade(ctx, accountID, securityID); err != nil {
+		return Transaction{}, err
+	}
+	if !quantity.IsPositive() {
+		return Transaction{}, ErrNonPositiveQuantity
+	}
+	if !price.IsPositive() {
+		return Transaction{}, ErrNonPositivePrice
+	}
+	if fees.IsNegative() {
+		return Transaction{}, ErrNegativeFees
+	}
+	// Oversell guard: derive the currently-held quantity for this security in
+	// this account (exact NUMERIC(28,10) compare, no epsilon — Epic 4 decision).
+	held, err := s.heldQuantity(ctx, accountID, securityID)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if quantity.GreaterThan(held) {
+		return Transaction{}, ErrOversold
+	}
+	proceeds := quantity.Mul(price).Sub(fees)
+	if proceeds.IsNegative() {
+		return Transaction{}, ErrNegativeProceeds
+	}
+	row, err := s.insertTrade(ctx, store.CreateTransactionParams{
+		Type:        string(Sell),
+		ToAccountID: idParam(accountID),
+		FromAmount:  decimal.Zero,
+		ToAmount:    proceeds,
+		OccurredOn:  date,
+		Description: description,
+		SecurityID:  idParam(securityID),
+		Quantity:    quantity,
+		Price:       price,
+		Fees:        fees,
+	})
+	if err != nil {
+		return Transaction{}, err
+	}
+	return toTransaction(accountID, row, nil, nil, nil), nil
+}
+
+// Dividend records a cash dividend: it credits the account's cash by the entered
+// amount and leaves the holding's quantity and basis unchanged. One tx (AD-3).
+func (s *Service) Dividend(ctx context.Context, accountID, securityID int64, amount decimal.Decimal, date time.Time, description string) (Transaction, error) {
+	if _, _, err := s.validateTrade(ctx, accountID, securityID); err != nil {
+		return Transaction{}, err
+	}
+	if !amount.IsPositive() {
+		return Transaction{}, ErrNonPositiveAmount
+	}
+	row, err := s.insertTrade(ctx, store.CreateTransactionParams{
+		Type:        string(Dividend),
+		ToAccountID: idParam(accountID),
+		FromAmount:  decimal.Zero,
+		ToAmount:    amount,
+		OccurredOn:  date,
+		Description: description,
+		SecurityID:  idParam(securityID),
+		Quantity:    decimal.Zero,
+		Price:       decimal.Zero,
+		Fees:        decimal.Zero,
+	})
+	if err != nil {
+		return Transaction{}, err
+	}
+	return toTransaction(accountID, row, nil, nil, nil), nil
+}
+
+// insertTrade writes one investment-transaction row in its own DB transaction.
+func (s *Service) insertTrade(ctx context.Context, params store.CreateTransactionParams) (store.Transaction, error) {
+	params.CategoryID = pgtype.Int8{} // trades are never categorized
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.Transaction{}, fmt.Errorf("transaction: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row, err := store.New(tx).CreateTransaction(ctx, params)
+	if err != nil {
+		return store.Transaction{}, fmt.Errorf("transaction: insert trade: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return store.Transaction{}, fmt.Errorf("transaction: commit: %w", err)
+	}
+	return row, nil
+}
+
+// heldQuantity derives the quantity currently held for one security in one
+// account, via the canonical domain derivation (AD-10).
+func (s *Service) heldQuantity(ctx context.Context, accountID, securityID int64) (decimal.Decimal, error) {
+	acct, holdings, err := s.deriveHoldings(ctx, accountID)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	_ = acct
+	for _, h := range holdings {
+		if h.SecurityID == securityID {
+			return h.Quantity, nil
+		}
+	}
+	return decimal.Zero, nil
+}
+
+// HoldingView is one derived position formatted for display: quantity, average
+// cost (basis ÷ quantity), cost basis, and cumulative realized gain — all in the
+// account's native currency. Market value / unrealized gain need a Price (4.3/4.4).
+type HoldingView struct {
+	SecurityID   int64
+	Symbol       string
+	Name         string
+	Quantity     decimal.Decimal
+	AvgCost      money.Money
+	CostBasis    money.Money
+	RealizedGain money.Money
+}
+
+// Holdings derives the account's active holdings (quantity > 0) plus the
+// cumulative realized Gain/Loss across all positions (including closed ones), in
+// the account's native currency (AD-2/AD-10). It surfaces domain.ErrOversold when
+// the ledger is inconsistent (e.g. a buy was deleted under a later sell).
+func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView, money.Money, error) {
+	acct, holdings, err := s.deriveHoldings(ctx, accountID)
+	if err != nil {
+		return nil, money.Money{}, err
+	}
+	cur := money.Currency(acct.Currency)
+	q := store.New(s.pool)
+	meta, err := securityMeta(ctx, q)
+	if err != nil {
+		return nil, money.Money{}, err
+	}
+	realized := decimal.Zero
+	views := make([]HoldingView, 0, len(holdings))
+	for _, h := range holdings {
+		realized = realized.Add(h.RealizedGain.Amount())
+		if !h.Quantity.IsPositive() {
+			continue // closed position: hidden from the active list (AC#4)
+		}
+		m := meta[h.SecurityID]
+		views = append(views, HoldingView{
+			SecurityID:   h.SecurityID,
+			Symbol:       m.symbol,
+			Name:         m.name,
+			Quantity:     h.Quantity,
+			AvgCost:      money.New(h.CostBasis.Amount().Div(h.Quantity), cur).Rounded(),
+			CostBasis:    h.CostBasis,
+			RealizedGain: h.RealizedGain,
+		})
+	}
+	return views, money.New(realized, cur), nil
+}
+
+// deriveHoldings loads the account and folds its investment ledger rows
+// (chronological) into the canonical domain holdings. It is the single read path
+// behind both Holdings and the oversell guard.
+func (s *Service) deriveHoldings(ctx context.Context, accountID int64) (store.Account, []domain.Holding, error) {
+	q := store.New(s.pool)
+	acct, err := q.GetAccount(ctx, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Account{}, nil, ErrAccountNotFound
+	}
+	if err != nil {
+		return store.Account{}, nil, fmt.Errorf("transaction: get account: %w", err)
+	}
+	rows, err := q.ListAccountTransactions(ctx, idParam(accountID))
+	if err != nil {
+		return store.Account{}, nil, fmt.Errorf("transaction: list: %w", err)
+	}
+	// ListAccountTransactions is occurred_on DESC, id DESC; reverse to get the
+	// chronological (ASC) order the average-cost fold requires.
+	events := make([]domain.TradeEvent, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		typ := TxType(r.Type)
+		if typ != Buy && typ != Sell && typ != Dividend {
+			continue
+		}
+		events = append(events, domain.TradeEvent{
+			SecurityID: nullID(r.SecurityID),
+			Type:       r.Type,
+			Quantity:   r.Quantity,
+			Price:      r.Price,
+			Fees:       r.Fees,
+			CashAmount: r.ToAmount,
+		})
+	}
+	holdings, err := domain.DeriveHoldings(money.Currency(acct.Currency), events)
+	if errors.Is(err, domain.ErrOversold) {
+		return store.Account{}, nil, ErrOversold
+	}
+	if err != nil {
+		return store.Account{}, nil, fmt.Errorf("transaction: derive holdings: %w", err)
+	}
+	return acct, holdings, nil
+}
+
+// secMeta is a security's display fields.
+type secMeta struct {
+	symbol string
+	name   string
+}
+
+// securityMeta builds an id->{symbol,name} map for resolving trade-row labels.
+func securityMeta(ctx context.Context, q *store.Queries) (map[int64]secMeta, error) {
+	secs, err := q.ListSecurities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: list securities: %w", err)
+	}
+	m := make(map[int64]secMeta, len(secs))
+	for _, sec := range secs {
+		m[sec.ID] = secMeta{symbol: sec.Symbol, name: sec.Name}
+	}
+	return m, nil
 }
 
 // Balance derives the account's current balance from the ledger (AD-2, AD-10).
@@ -299,11 +613,28 @@ func (s *Service) List(ctx context.Context, accountID int64) ([]Transaction, err
 	if err != nil {
 		return nil, err
 	}
+	secNames, err := securitySymbols(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Transaction, len(rows))
 	for i, r := range rows {
-		out[i] = toTransaction(accountID, r, names, catNames)
+		out[i] = toTransaction(accountID, r, names, catNames, secNames)
 	}
 	return out, nil
+}
+
+// securitySymbols builds an id->symbol map for resolving a trade row's label.
+func securitySymbols(ctx context.Context, q *store.Queries) (map[int64]string, error) {
+	secs, err := q.ListSecurities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: list securities: %w", err)
+	}
+	names := make(map[int64]string, len(secs))
+	for _, sec := range secs {
+		names[sec.ID] = sec.Symbol
+	}
+	return names, nil
 }
 
 // accountNames builds an id->name map over all accounts (incl. archived) so
@@ -451,6 +782,7 @@ type RegisterRow struct {
 	Type          TxType
 	Description   string
 	Category      string
+	Security      string // security symbol for trade rows (buy/sell/dividend)
 	Account       string // account name (income/expense) or "From → To" (transfer)
 	Amount        money.Money
 	ToAmount      money.Money
@@ -481,11 +813,16 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 	if err != nil {
 		return nil, err
 	}
+	secNames, err := securitySymbols(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]RegisterRow, 0, len(rows))
 	for _, r := range rows {
 		fromID, toID := nullID(r.FromAccountID), nullID(r.ToAccountID)
 		catID := nullID(r.CategoryID)
+		secID := nullID(r.SecurityID)
 		typ := TxType(r.Type)
 		if f.Type != "" && typ != f.Type {
 			continue
@@ -502,9 +839,11 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 			Type:        typ,
 			Description: r.Description,
 			Category:    catNames[catID],
+			Security:    secNames[secID],
 		}
 		switch typ {
-		case Income:
+		case Income, Sell, Dividend:
+			// Cash credited to the to-account (income, sale proceeds, dividend).
 			row.Account = name[toID]
 			row.Amount = money.New(r.ToAmount, cur[toID])
 			row.Incoming = true
@@ -516,7 +855,7 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 				row.CrossCurrency = true
 				row.ToAmount = money.New(r.ToAmount, cur[toID])
 			}
-		default: // Expense
+		default: // Expense, Buy — cash debited from the from-account.
 			row.Account = name[fromID]
 			row.Amount = money.New(r.FromAmount, cur[fromID])
 			row.Incoming = false
@@ -526,14 +865,19 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 	return out, nil
 }
 
-func toTransaction(accountID int64, r store.Transaction, names, catNames map[int64]string) Transaction {
+func toTransaction(accountID int64, r store.Transaction, names, catNames, secNames map[int64]string) Transaction {
 	catID := nullID(r.CategoryID)
+	secID := nullID(r.SecurityID)
 	t := Transaction{
 		ID:           r.ID,
 		Type:         TxType(r.Type),
 		AccountID:    accountID,
 		CategoryID:   catID,
 		CategoryName: catNames[catID],
+		SecurityID:   secID,
+		Security:     secNames[secID],
+		Quantity:     r.Quantity,
+		Price:        r.Price,
 		Date:         r.OccurredOn,
 		Description:  r.Description,
 		CreatedAt:    r.CreatedAt.Time,

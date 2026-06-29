@@ -53,6 +53,27 @@ type TxRow struct {
 	Signed       string // e.g. "+100.0000 USD" / "-30.0000 USD"
 	Incoming     bool   // true when the row credits this account
 	Editable     bool   // income/expense only
+	Security     string // security symbol for trade rows (buy/sell/dividend)
+	Quantity     string // shares for trade rows
+	Price        string // per-share price for trade rows
+}
+
+// HoldingRow is one derived position on an investment account's detail page
+// (Story 4.2): all figures pre-formatted; values are derived on read (AD-2).
+type HoldingRow struct {
+	Symbol       string
+	Name         string
+	Quantity     string
+	AvgCost      string
+	CostBasis    string
+	RealizedGain string
+}
+
+// SecurityChoice is one option in an investment account's trade <select>
+// (filtered to securities whose quote currency matches the account).
+type SecurityChoice struct {
+	ID     int64
+	Symbol string
 }
 
 // TransferTarget is a destination account option in the transfer form.
@@ -129,6 +150,7 @@ type RegisterRow struct {
 	Type        string
 	Description string
 	Category    string
+	Security    string // security symbol for trade rows (buy/sell/dividend)
 	Account     string
 	Amount      string
 	Incoming    bool
