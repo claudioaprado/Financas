@@ -96,6 +96,13 @@ func (m Money) Rounded() Money {
 	return Money{amount: m.amount.RoundBank(MoneyScale), currency: m.currency}
 }
 
+// Abs returns a copy of m with a non-negative amount, preserving the currency.
+// Used to render a magnitude when the sign is carried separately (e.g. the
+// Amount primitive supplies its own +/− glyph).
+func (m Money) Abs() Money {
+	return Money{amount: m.amount.Abs(), currency: m.currency}
+}
+
 // String renders the amount fixed at MoneyScale (banker's rounding) with its
 // currency, never as a float.
 func (m Money) String() string {

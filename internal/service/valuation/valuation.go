@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -66,6 +67,8 @@ type Portfolio struct {
 	Holdings           []HoldingValuation
 	PortfolioValue     money.Money      // Display Currency
 	NetWorth           money.Money      // Display Currency
+	Cash               money.Money      // Display Currency (Σ converted cash assets)
+	TotalGain          money.Money      // Display Currency (Σ converted unrealized G/L, signed)
 	RealizedByCurrency []money.Money    // cumulative realized G/L per NATIVE currency
 	Missing            []money.Currency // currencies excluded from the totals (no rate)
 	Unpriced           []string         // symbols of held positions with no price
@@ -82,13 +85,23 @@ func New(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool}
 }
 
-// Portfolio derives the whole-portfolio valuation: it reads the active accounts,
-// the full ledger, the latest prices, the securities and the Display Currency
-// through the store, re-derives each account's balance and each investment
-// account's holdings via domain, values priced holdings natively, looks up the
-// exact native→Display rates, and calls domain.NetWorth for the canonical
-// Display-Currency Portfolio value + Net Worth.
+// Portfolio derives the whole-portfolio valuation as of today: the current
+// figures shown on /investments and the dashboard cards. It delegates to
+// portfolioAsOf with the current time, so today's behaviour is unchanged.
 func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
+	return s.portfolioAsOf(ctx, time.Now())
+}
+
+// portfolioAsOf derives the whole-portfolio valuation AS OF a given instant: it
+// reads the active accounts, the ledger, the prices and rates effective on or
+// before asOf, the securities and the Display Currency through the store,
+// re-derives each account's balance and each investment account's holdings from
+// the ledger restricted to occurred_on ≤ asOf, values priced holdings natively,
+// looks up the exact native→Display rates effective ≤ asOf, and calls
+// domain.NetWorth for the canonical Display-Currency figures. With asOf = now it
+// is the current portfolio; with asOf = a prior sample date it is the
+// period-change baseline (AD-11) — never recomputing history at today's rate.
+func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio, error) {
 	q := store.New(s.pool)
 
 	displayCode, err := q.GetDisplayCurrency(ctx)
@@ -107,12 +120,19 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 		return Portfolio{}, fmt.Errorf("valuation: list transactions: %w", err)
 	}
 
-	// Balance legs (all rows) + per-account trade events. ListTransactions is
-	// occurred_on DESC, id DESC; the average-cost fold needs chronological ASC,
-	// so each account's events are reversed below.
+	// Balance legs + per-account trade events, restricted to rows occurring on or
+	// before asOf, compared DATE-to-DATE (occurred_on is a DATE; asOf may carry a
+	// wall-clock time) so the cut is calendar-based and timezone-stable, matching
+	// the `effective_date <= asOf::date` used for prices/rates. ListTransactions is
+	// occurred_on DESC, id DESC; the average-cost fold needs chronological ASC, so
+	// each account's events are reversed below.
+	asOfDay := dateOnlyUTC(asOf)
 	allLegs := make([]domain.BalanceTxn, 0, len(rows))
 	eventsDesc := make(map[int64][]domain.TradeEvent)
 	for _, r := range rows {
+		if dateOnlyUTC(r.OccurredOn).After(asOfDay) {
+			continue // a future-dated leg/trade is not part of the as-of valuation
+		}
 		allLegs = append(allLegs, domain.BalanceTxn{
 			FromAccountID: nullID(r.FromAccountID),
 			FromAmount:    r.FromAmount,
@@ -136,7 +156,7 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 		})
 	}
 
-	prices, err := latestPrices(ctx, q)
+	prices, err := latestPrices(ctx, q, asOf)
 	if err != nil {
 		return Portfolio{}, err
 	}
@@ -149,6 +169,7 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 		cash        []money.Money
 		liabilities []money.Money
 		holdingsMV  []money.Money // priced holdings' market value (native), for Net Worth
+		unrealized  []money.Money // priced holdings' unrealized gain (native), for Total Gain/Loss
 		allRealized []money.Money
 		holdings    []HoldingValuation
 		unpriced    []string
@@ -203,6 +224,7 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 				row.Valuation = market
 				row.UnrealizedGain = unreal
 				holdingsMV = append(holdingsMV, market)
+				unrealized = append(unrealized, unreal)
 			} else {
 				unpriced = append(unpriced, m.symbol)
 			}
@@ -210,17 +232,20 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 		}
 	}
 
-	rates := s.buildRates(ctx, q, display, cash, liabilities, holdingsMV)
+	rates := s.buildRates(ctx, q, display, asOf, cash, liabilities, holdingsMV, unrealized)
 	v := domain.NetWorth(display, domain.ValuationInput{
 		Cash:        cash,
 		Liabilities: liabilities,
 		Holdings:    holdingsMV,
+		Unrealized:  unrealized,
 	}, rates)
 
 	return Portfolio{
 		Holdings:           holdings,
 		PortfolioValue:     v.PortfolioValue,
 		NetWorth:           v.NetWorth,
+		Cash:               v.Cash,
+		TotalGain:          v.TotalGain,
 		RealizedByCurrency: domain.SumByCurrency(allRealized),
 		Missing:            v.Missing,
 		Unpriced:           unpriced,
@@ -228,13 +253,159 @@ func (s *Service) Portfolio(ctx context.Context) (Portfolio, error) {
 	}, nil
 }
 
-// buildRates looks up the exact native→Display rate (effective today) for every
+// KPI is one dashboard summary card's figure: a Display-Currency value plus its
+// period-change delta against the prior-sample baseline (AD-11). Positive/Negative
+// flag the value's own sign (used by the gain/loss card). DeltaUp/DeltaDown flag
+// the delta's direction; HasDelta is false when no prior sample exists or the
+// baseline is non-positive — the card then renders "—" (UX-DR8). All math is
+// decimal (NFR-5); the handler only formats (AD-1).
+type KPI struct {
+	Value     money.Money
+	Positive  bool
+	Negative  bool
+	DeltaPct  decimal.Decimal
+	DeltaUp   bool
+	DeltaDown bool
+	HasDelta  bool
+}
+
+// Dashboard is the read model behind the KPI card row (Story 5.2, FR-11/UX-DR2):
+// Net Worth, Portfolio Value, Total Gain/Loss and Cash in the Display Currency,
+// each with a period-change delta vs the prior-sample-date valuation. Missing and
+// Unpriced carry the same partial-total notices as Portfolio; PriorDate is the
+// baseline's sample date (zero when no prior sample exists).
+type Dashboard struct {
+	NetWorth  KPI
+	Portfolio KPI
+	Cash      KPI
+	GainLoss  KPI
+	Display   money.Currency
+	Missing   []money.Currency
+	Unpriced  []string
+	PriorDate time.Time
+}
+
+// Dashboard composes the KPI card row: the current valuation (as of now) for the
+// four figures, plus a per-card period-change delta computed against the
+// portfolio value at the prior sample date — the sample before the latest one
+// the current value reflects (AD-11, see priorSampleDate). When no prior sample
+// exists every delta is absent (HasDelta false) and the cards render "—".
+func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
+	now := time.Now()
+	cur, err := s.portfolioAsOf(ctx, now)
+	if err != nil {
+		return Dashboard{}, err
+	}
+
+	dash := Dashboard{
+		NetWorth:  KPI{Value: cur.NetWorth},
+		Portfolio: KPI{Value: cur.PortfolioValue},
+		Cash:      KPI{Value: cur.Cash},
+		GainLoss:  signedKPI(cur.TotalGain),
+		Display:   cur.Display,
+		Missing:   cur.Missing,
+		Unpriced:  cur.Unpriced,
+	}
+
+	prior, ok, err := s.priorSampleDate(ctx, now)
+	if err != nil {
+		return Dashboard{}, err
+	}
+	if ok {
+		base, err := s.portfolioAsOf(ctx, prior)
+		if err != nil {
+			return Dashboard{}, err
+		}
+		dash.PriorDate = prior
+		setDelta(&dash.NetWorth, cur.NetWorth, base.NetWorth)
+		setDelta(&dash.Portfolio, cur.PortfolioValue, base.PortfolioValue)
+		setDelta(&dash.Cash, cur.Cash, base.Cash)
+		setDelta(&dash.GainLoss, cur.TotalGain, base.TotalGain)
+	}
+	return dash, nil
+}
+
+// signedKPI builds a KPI whose value carries its own gain/loss sign (the gain/loss
+// card colours and signs the figure itself, not just its delta).
+func signedKPI(v money.Money) KPI {
+	return KPI{Value: v, Positive: v.Amount().IsPositive(), Negative: v.Amount().IsNegative()}
+}
+
+// setDelta fills a KPI's period-change fields from the canonical domain figure,
+// leaving HasDelta false (→ "—") when the change is undefined (no prior sample
+// value, or a non-positive baseline).
+func setDelta(k *KPI, now, base money.Money) {
+	pct, ok := domain.PercentChange(now, base)
+	if !ok {
+		return
+	}
+	k.DeltaPct = pct
+	k.DeltaUp = pct.IsPositive()
+	k.DeltaDown = pct.IsNegative()
+	k.HasDelta = true
+}
+
+// priorSampleDate returns the period-change baseline date (AD-11): the
+// SECOND-most-recent distinct Price/ExchangeRate effective date on or before
+// today. The most recent such date is the one the CURRENT valuation already
+// reflects (prices/rates effective ≤ now), so the baseline is the sample BEFORE
+// it — comparing the latest sample against its predecessor. ok is false when
+// fewer than two distinct sample dates exist on or before today (the day-one
+// "—" state): with a single sample the current value has nothing prior to
+// compare against. Future-effective samples are ignored (they are not part of
+// the current value). Owner-entered history is small, so it scans in Go — no
+// snapshot table and no new query.
+func (s *Service) priorSampleDate(ctx context.Context, now time.Time) (time.Time, bool, error) {
+	q := store.New(s.pool)
+	today := dateOnlyUTC(now)
+
+	seen := make(map[time.Time]bool)
+	add := func(eff time.Time) {
+		d := dateOnlyUTC(eff)
+		if !d.After(today) { // ignore future-effective samples
+			seen[d] = true
+		}
+	}
+
+	prices, err := q.ListPrices(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("valuation: list prices: %w", err)
+	}
+	for _, p := range prices {
+		add(p.EffectiveDate)
+	}
+	rates, err := q.ListExchangeRates(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("valuation: list exchange rates: %w", err)
+	}
+	for _, r := range rates {
+		add(r.EffectiveDate)
+	}
+
+	if len(seen) < 2 {
+		return time.Time{}, false, nil // need a current sample AND a prior one
+	}
+	dates := make([]time.Time, 0, len(seen))
+	for d := range seen {
+		dates = append(dates, d)
+	}
+	sort.Slice(dates, func(i, j int) bool { return dates[i].After(dates[j]) }) // most-recent first
+	return dates[1], true, nil                                                 // the prior (second-most-recent) sample
+}
+
+// dateOnlyUTC normalizes a timestamp to UTC midnight so price/rate effective
+// dates (stored as DATE → UTC midnight) and "today" compare by calendar date.
+func dateOnlyUTC(t time.Time) time.Time {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// buildRates looks up the exact native→Display rate (effective ≤ asOf) for every
 // distinct native currency present in the inputs, except the Display Currency
 // itself. A missing pair is left absent (domain.NetWorth then reports it in
 // Missing); the rate is never inverted (AD-6).
-func (s *Service) buildRates(ctx context.Context, q *store.Queries, display money.Currency, groups ...[]money.Money) map[money.Currency]decimal.Decimal {
+func (s *Service) buildRates(ctx context.Context, q *store.Queries, display money.Currency, asOf time.Time, groups ...[]money.Money) map[money.Currency]decimal.Decimal {
 	rates := make(map[money.Currency]decimal.Decimal)
-	today := time.Now()
 	for _, g := range groups {
 		for _, m := range g {
 			c := m.Currency()
@@ -247,7 +418,7 @@ func (s *Service) buildRates(ctx context.Context, q *store.Queries, display mone
 			r, err := q.RateEffectiveAt(ctx, store.RateEffectiveAtParams{
 				FromCurrency:  string(c),
 				ToCurrency:    string(display),
-				EffectiveDate: today,
+				EffectiveDate: asOf,
 			})
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue // no direct rate → Missing (never invert/guess)
@@ -281,9 +452,9 @@ func securityMeta(ctx context.Context, q *store.Queries) (map[int64]secMeta, err
 }
 
 // latestPrices builds a securityID->latest-price map (effective on or before
-// today). Reads via the store (store-not-service, AD-1).
-func latestPrices(ctx context.Context, q *store.Queries) (map[int64]store.LatestPricesRow, error) {
-	latest, err := q.LatestPrices(ctx, time.Now())
+// asOf). Reads via the store (store-not-service, AD-1).
+func latestPrices(ctx context.Context, q *store.Queries, asOf time.Time) (map[int64]store.LatestPricesRow, error) {
+	latest, err := q.LatestPrices(ctx, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("valuation: latest prices: %w", err)
 	}

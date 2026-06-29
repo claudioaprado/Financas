@@ -123,6 +123,7 @@ type Imports interface {
 // service/valuation.
 type Valuation interface {
 	Portfolio(ctx context.Context) (valuation.Portfolio, error)
+	Dashboard(ctx context.Context) (valuation.Dashboard, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -185,7 +186,7 @@ func NewRouter(deps Deps) http.Handler {
 	// dashboard are navigable placeholders until their epics build them.
 	r.Group(func(pr chi.Router) {
 		pr.Use(requireAuth(deps.Sessions))
-		pr.Get("/", renderPage(deps, "dashboard", func(d web.ShellData) templ.Component { return web.DashboardPage(d) }))
+		pr.Get("/", dashboardPage(deps))
 		pr.Get("/investments", investmentsPage(deps))
 		pr.Get("/transactions", transactionsRegister(deps))
 		pr.Get("/accounts", accountsForm(deps))
@@ -1141,6 +1142,89 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.InvestmentAccountDetailPage(shellData(deps, req.Context(), "accounts"), acct.ID, acct.Name, string(acct.Currency), balStr, errMsg, holdings, realized, oversold, securities, rows).Render(req.Context(), w)
+}
+
+// dashboardPage renders the post-login KPI card row (Story 5.2, FR-11/UX-DR2):
+// Net Worth, Portfolio Value, Total Gain/Loss and Cash in the Display Currency,
+// each with a period-change delta against the prior-sample baseline. All figures
+// and flags come pre-computed from the valuation service (AD-1/AD-10) — this
+// handler only formats money and copies flags into the view. A load failure
+// surfaces a graceful banner (oversold ledger gets a specific hint), never a
+// blank page, mirroring investmentsPage.
+func dashboardPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		d, err := deps.Valuation.Dashboard(req.Context())
+		if err != nil {
+			msg := "Could not load your dashboard right now. Please try again."
+			if errors.Is(err, valuation.ErrOversold) {
+				msg = "A sell exceeds the quantity held in an investment account — fix the offending trade so your dashboard can be valued."
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), web.DashboardView{ErrMsg: msg}).Render(req.Context(), w)
+			return
+		}
+
+		view := web.DashboardView{
+			Cards: []web.KPICardView{
+				kpiCard("Net worth", "networth", d.NetWorth),
+				kpiCard("Portfolio value", "portfolio", d.Portfolio),
+				kpiCard("Total gain/loss", "gainloss", d.GainLoss),
+				kpiCard("Cash", "cash", d.Cash),
+			},
+		}
+		if len(d.Missing) > 0 {
+			codes := make([]string, len(d.Missing))
+			for i, c := range d.Missing {
+				codes[i] = string(c)
+			}
+			view.MissingCodes = strings.Join(codes, ", ")
+		}
+		if len(d.Unpriced) > 0 {
+			view.UnpricedSymbols = strings.Join(d.Unpriced, ", ")
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), view).Render(req.Context(), w)
+	}
+}
+
+// kpiCard maps a valuation.KPI into its pre-formatted view row: the money string
+// + gain/loss flags for the Amount primitive, and the period-change delta. The
+// web layer does no math (AD-1).
+func kpiCard(label, icon string, k valuation.KPI) web.KPICardView {
+	// When a gain/loss flag is set, the Amount primitive supplies the +/− glyph,
+	// so pass the MAGNITUDE to avoid a double sign (e.g. "−-100.0000 BRL"). The
+	// unflagged value cards keep their signed string, so a negative Net Worth
+	// still shows its own "−".
+	disp := k.Value.String()
+	if k.Positive || k.Negative {
+		disp = k.Value.Abs().String()
+	}
+	return web.KPICardView{
+		Label: label,
+		Icon:  icon,
+		Amount: web.MoneyText{
+			Display:  disp,
+			Positive: k.Positive,
+			Negative: k.Negative,
+		},
+		Delta: deltaText(k),
+	}
+}
+
+// deltaText formats a KPI's period change for display: a magnitude percentage
+// (the ▲/▼ arrow carries direction) with up/down flags, or the "—" empty state
+// when no comparable prior sample exists.
+func deltaText(k valuation.KPI) web.DeltaText {
+	if !k.HasDelta {
+		return web.DeltaText{None: true}
+	}
+	return web.DeltaText{
+		Display: k.DeltaPct.Abs().StringFixed(1) + "%",
+		Up:      k.DeltaUp,
+		Down:    k.DeltaDown,
+	}
 }
 
 // investmentsPage renders the cross-account portfolio & Net Worth view (Story

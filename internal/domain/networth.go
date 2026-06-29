@@ -16,6 +16,7 @@ type ValuationInput struct {
 	Cash        []money.Money // cash + investment cash balances (assets), native
 	Liabilities []money.Money // credit balances owed, as POSITIVE magnitudes, native
 	Holdings    []money.Money // per-holding market value, native (priced holdings only)
+	Unrealized  []money.Money // per-holding unrealized gain/loss, native (priced holdings only)
 }
 
 // Valuation is the result of NetWorth, expressed in the Display Currency and
@@ -25,6 +26,8 @@ type ValuationInput struct {
 type Valuation struct {
 	PortfolioValue money.Money      // Σ converted Holdings market value
 	NetWorth       money.Money      // Σ converted (Cash + Holdings) − Σ converted Liabilities
+	Cash           money.Money      // Σ converted Cash assets (sub-aggregate of NetWorth)
+	TotalGain      money.Money      // Σ converted per-holding unrealized gain/loss (signed)
 	Missing        []money.Currency // native currencies with no rate to Display — excluded
 }
 
@@ -41,6 +44,8 @@ type Valuation struct {
 //
 //	PortfolioValue = round(Σ holdingsConv)
 //	NetWorth       = round(Σ cashConv + Σ holdingsConv − Σ liabConv)
+//	Cash           = round(Σ cashConv)                 // sub-aggregate of NetWorth
+//	TotalGain      = round(Σ unrealizedConv)           // signed; per-holding unrealized
 //
 // Missing is deduplicated, sorted by code, and only includes a currency when a
 // NON-ZERO amount was skipped (a zero balance in an unrated currency must not
@@ -69,6 +74,7 @@ func NetWorth(display money.Currency, in ValuationInput, rates map[money.Currenc
 	cashConv := convertSum(in.Cash)
 	holdingsConv := convertSum(in.Holdings)
 	liabConv := convertSum(in.Liabilities)
+	unrealConv := convertSum(in.Unrealized)
 
 	codes := make([]string, 0, len(missing))
 	for c := range missing {
@@ -83,6 +89,8 @@ func NetWorth(display money.Currency, in ValuationInput, rates map[money.Currenc
 	return Valuation{
 		PortfolioValue: money.New(holdingsConv, display).Rounded(),
 		NetWorth:       money.New(cashConv.Add(holdingsConv).Sub(liabConv), display).Rounded(),
+		Cash:           money.New(cashConv, display).Rounded(),
+		TotalGain:      money.New(unrealConv, display).Rounded(),
 		Missing:        miss,
 	}
 }

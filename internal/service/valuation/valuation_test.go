@@ -239,6 +239,242 @@ func TestPortfolioValuation(t *testing.T) {
 	}
 }
 
+// TestDashboardAsOfAndDeltas exercises the period-change machinery end to end: a
+// holding priced 100 ten days ago and 110 today, plus a positive cash balance.
+// portfolioAsOf(prior) must value the holding at the OLD price (as-of history),
+// and Dashboard must compute each card's per-card % delta against that baseline —
+// with the gain/loss card showing "—" because its baseline is zero.
+func TestDashboardAsOfAndDeltas(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	today := dateOnlyUTC(time.Now())
+	old := today.AddDate(0, 0, -10)
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+
+	// A cash account with a positive balance so Net Worth/Cash baselines are > 0.
+	wallet, err := accts.Create(ctx, fmt.Sprintf("Wallet-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	if _, err := txns.Record(ctx, wallet.ID, transaction.Income, req("5000"), old, "salary", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+
+	// An investment account: buy 10 @ 100 ten days ago (basis 1000, invest cash −1000).
+	broker, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("SEC%d", run), "Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("10"), req("100"), req("0"), old, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	// Price 100 effective ten days ago, 110 effective today.
+	if _, err := prices.Add(ctx, sec.ID, old, req("100")); err != nil {
+		t.Fatalf("price old: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, today, req("110")); err != nil {
+		t.Fatalf("price new: %v", err)
+	}
+
+	// Baseline (as of the prior sample = old): holding at the OLD price (100).
+	base, err := svc.portfolioAsOf(ctx, old)
+	if err != nil {
+		t.Fatalf("portfolioAsOf(old): %v", err)
+	}
+	if got := base.PortfolioValue.String(); got != "1000.0000 BRL" {
+		t.Errorf("baseline PortfolioValue = %s, want 1000.0000 BRL (old price)", got)
+	}
+	if got := base.TotalGain.String(); got != "0.0000 BRL" {
+		t.Errorf("baseline TotalGain = %s, want 0.0000 BRL", got)
+	}
+
+	d, err := svc.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("dashboard: %v", err)
+	}
+
+	// Current figures: cash 5000−1000=4000; holdings 10×110=1100; NW 5100; gain 100.
+	if got := d.NetWorth.Value.String(); got != "5100.0000 BRL" {
+		t.Errorf("NetWorth = %s, want 5100.0000 BRL", got)
+	}
+	if got := d.Portfolio.Value.String(); got != "1100.0000 BRL" {
+		t.Errorf("Portfolio = %s, want 1100.0000 BRL", got)
+	}
+	if got := d.Cash.Value.String(); got != "4000.0000 BRL" {
+		t.Errorf("Cash = %s, want 4000.0000 BRL", got)
+	}
+	if got := d.GainLoss.Value.String(); got != "100.0000 BRL" {
+		t.Errorf("GainLoss = %s, want 100.0000 BRL", got)
+	}
+	if !d.GainLoss.Positive {
+		t.Error("GainLoss.Positive = false, want true (a gain)")
+	}
+
+	// Per-card deltas vs the old baseline.
+	if !d.PriorDate.Equal(old) {
+		t.Errorf("PriorDate = %s, want %s", d.PriorDate.Format("2006-01-02"), old.Format("2006-01-02"))
+	}
+	if !d.NetWorth.HasDelta || !d.NetWorth.DeltaUp || d.NetWorth.DeltaPct.StringFixed(1) != "2.0" {
+		t.Errorf("NetWorth delta = %+v, want up 2.0%%", d.NetWorth)
+	}
+	if !d.Portfolio.HasDelta || !d.Portfolio.DeltaUp || d.Portfolio.DeltaPct.StringFixed(1) != "10.0" {
+		t.Errorf("Portfolio delta = %+v, want up 10.0%%", d.Portfolio)
+	}
+	if !d.Cash.HasDelta || d.Cash.DeltaUp || d.Cash.DeltaDown || d.Cash.DeltaPct.StringFixed(1) != "0.0" {
+		t.Errorf("Cash delta = %+v, want flat 0.0%%", d.Cash)
+	}
+	// Gain/loss baseline is zero → % undefined → "—".
+	if d.GainLoss.HasDelta {
+		t.Errorf("GainLoss.HasDelta = true, want false (zero baseline → \"—\")")
+	}
+}
+
+// TestDashboardPriorSampleWhenLatestIsPast guards the period-change semantics
+// when the most recent sample is in the PAST (no price entered today): the
+// baseline must be the sample BEFORE the latest one (today-20), not the latest
+// itself (today-10) — otherwise the delta degenerates to a misleading 0%. The
+// current value reflects the today-10 price; the baseline must reflect today-20.
+func TestDashboardPriorSampleWhenLatestIsPast(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	today := dateOnlyUTC(time.Now())
+	older := today.AddDate(0, 0, -20)
+	recent := today.AddDate(0, 0, -10)
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	broker, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("SEC%d", run), "Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("10"), req("100"), req("0"), older, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	// Two PAST price samples; none today.
+	if _, err := prices.Add(ctx, sec.ID, older, req("100")); err != nil {
+		t.Fatalf("price older: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, recent, req("110")); err != nil {
+		t.Fatalf("price recent: %v", err)
+	}
+
+	d, err := svc.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("dashboard: %v", err)
+	}
+	// Baseline = older (today-20) @ price 100 → portfolio 1000; current reflects
+	// the recent (today-10) price 110 → 1100. Delta must be a real +10%, not 0%.
+	if !d.PriorDate.Equal(older) {
+		t.Errorf("PriorDate = %s, want %s (the sample before the latest)", d.PriorDate.Format("2006-01-02"), older.Format("2006-01-02"))
+	}
+	if got := d.Portfolio.Value.String(); got != "1100.0000 BRL" {
+		t.Errorf("Portfolio = %s, want 1100.0000 BRL (recent price)", got)
+	}
+	if !d.Portfolio.HasDelta || !d.Portfolio.DeltaUp || d.Portfolio.DeltaPct.StringFixed(1) != "10.0" {
+		t.Errorf("Portfolio delta = %+v, want up 10.0%% (not a degenerate 0%%)", d.Portfolio)
+	}
+}
+
+// TestDashboardNoPriorSample confirms the day-one state: with only a price
+// effective today (no input changed before today), every card's delta is "—".
+func TestDashboardNoPriorSample(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	today := dateOnlyUTC(time.Now())
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	broker, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("SEC%d", run), "Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("10"), req("100"), req("0"), today, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, today, req("110")); err != nil {
+		t.Fatalf("price: %v", err)
+	}
+
+	d, err := svc.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("dashboard: %v", err)
+	}
+	if !d.PriorDate.IsZero() {
+		t.Errorf("PriorDate = %s, want zero (no prior sample)", d.PriorDate)
+	}
+	for name, k := range map[string]KPI{"NetWorth": d.NetWorth, "Portfolio": d.Portfolio, "Cash": d.Cash, "GainLoss": d.GainLoss} {
+		if k.HasDelta {
+			t.Errorf("%s.HasDelta = true, want false (no prior sample → \"—\")", name)
+		}
+	}
+}
+
 // assertRealized asserts the cumulative realized G/L for a currency.
 func assertRealized(t *testing.T, p Portfolio, cur money.Currency, want string) {
 	t.Helper()

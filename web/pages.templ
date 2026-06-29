@@ -1,15 +1,89 @@
 package web
 
-// DashboardPage is the authenticated landing page wrapped in the app shell. The
-// real KPI dashboard (cards, chart, allocation, insight) is Epic 5; this shows
-// a shell-framed placeholder so the shell and navigation are usable now.
-templ DashboardPage(data ShellData) {
+// DashboardPage is the authenticated landing page: the KPI summary card row
+// (Story 5.2, UX-DR2) — Net Worth, Portfolio Value, Total Gain/Loss and Cash in
+// the Display Currency, each an icon chip + a large number (the Amount primitive,
+// currency + sign) + a period-change delta (▲/▼ %). Partial-total notices mirror
+// /investments; when ErrMsg is set only the error banner renders. The web layer
+// renders pre-formatted figures only — no math (AD-1).
+templ DashboardPage(data ShellData, view DashboardView) {
 	@Shell(data) {
-		<section class="rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Dashboard</h1>
-			<p class="mt-1 text-muted">Your financial overview will appear here.</p>
-		</section>
+		<h1 class="text-2xl font-bold">Dashboard</h1>
+		if view.ErrMsg != "" {
+			@Card("mt-4") {
+				<p class="rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ view.ErrMsg }</p>
+			}
+		} else {
+			<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+				for _, c := range view.Cards {
+					@kpiCard(c)
+				}
+			</div>
+			if view.MissingCodes != "" {
+				<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+					Totals exclude <span class="font-semibold">{ view.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+				</p>
+			}
+			if view.UnpricedSymbols != "" {
+				<p class="mt-3 text-sm text-muted">
+					No price for <span class="font-medium">{ view.UnpricedSymbols }</span> — excluded from portfolio value. <a href="/prices" class="text-accent hover:underline">Add prices</a>
+				</p>
+			}
+		}
 	}
+}
+
+// kpiCard renders one summary card: an icon chip + muted label, the large number
+// via the Amount primitive, and the period-change delta.
+templ kpiCard(c KPICardView) {
+	@Card("") {
+		<div class="flex items-center gap-2">
+			@kpiIcon(c.Icon)
+			<span class="text-label text-muted">{ c.Label }</span>
+		</div>
+		<div class="mt-2">
+			@Amount(c.Amount, AmountStat)
+		</div>
+		<div class="mt-1">
+			@deltaBadge(c.Delta)
+		</div>
+	}
+}
+
+// deltaBadge renders a period-change delta: a ▲/▼ arrow (which carries the
+// direction without relying on colour alone, NFR-4) plus the magnitude percent,
+// or the "—" empty state until a comparable prior sample exists (UX-DR8).
+templ deltaBadge(d DeltaText) {
+	if d.None {
+		<span class="text-sm text-muted" title="No prior sample to compare yet">—</span>
+	} else {
+		<span class={ "inline-flex items-center gap-1 text-sm font-medium", templ.KV("text-gain", d.Up), templ.KV("text-loss", d.Down) }>
+			if d.Up {
+				<span aria-hidden="true">▲</span><span class="sr-only">up </span>
+			}
+			if d.Down {
+				<span aria-hidden="true">▼</span><span class="sr-only">down </span>
+			}
+			{ d.Display }
+		</span>
+	}
+}
+
+// kpiIcon renders a small decorative accent chip with a per-KPI glyph (UX-DR2's
+// icon chip). Decorative only — aria-hidden, the label carries the meaning.
+templ kpiIcon(kind string) {
+	<span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-card bg-accent/10 text-accent" aria-hidden="true">
+		switch kind {
+			case "networth":
+				<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><rect x="2.5" y="5" width="15" height="10" rx="2"></rect><circle cx="10" cy="10" r="2.5"></circle></svg>
+			case "portfolio":
+				<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path d="M3 16h14"></path><rect x="4" y="9" width="3" height="6"></rect><rect x="8.5" y="6" width="3" height="9"></rect><rect x="13" y="11" width="3" height="4"></rect></svg>
+			case "gainloss":
+				<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path d="M3 13l4-4 3 3 7-7"></path><path d="M13 5h4v4"></path></svg>
+			default:
+				<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><circle cx="10" cy="10" r="6.5"></circle><path d="M10 6.5v7M8 8.5h3a1.5 1.5 0 010 3H9a1.5 1.5 0 000 3h3"></path></svg>
+		}
+	</span>
 }
 
 // ComingSoon renders a shell-framed placeholder for a nav section whose real

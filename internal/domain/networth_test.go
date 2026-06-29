@@ -108,6 +108,50 @@ func TestNetWorthMissingDedupedAndSorted(t *testing.T) {
 	}
 }
 
+func TestNetWorthExposesCashAndTotalGain(t *testing.T) {
+	// Cash = Σ converted cash assets; TotalGain = Σ converted per-holding
+	// unrealized gain — both Display Currency, convert-then-sum, round once.
+	rates := map[money.Currency]decimal.Decimal{money.USD: dec("5")}
+	in := ValuationInput{
+		Cash:        []money.Money{brl("100.0000"), usd("10.0000")}, // 100 + 50 = 150
+		Liabilities: []money.Money{brl("30.0000")},
+		Holdings:    []money.Money{usd("20.0000")}, // 100 BRL market value
+		Unrealized:  []money.Money{usd("4.0000")},  // 20 BRL unrealized gain
+	}
+	v := NetWorth(money.BRL, in, rates)
+
+	if got, want := v.Cash.String(), "150.0000 BRL"; got != want {
+		t.Errorf("Cash = %s, want %s", got, want)
+	}
+	if got, want := v.TotalGain.String(), "20.0000 BRL"; got != want {
+		t.Errorf("TotalGain = %s, want %s", got, want)
+	}
+	// Existing figures unchanged by the new inputs.
+	if got, want := v.PortfolioValue.String(), "100.0000 BRL"; got != want {
+		t.Errorf("PortfolioValue = %s, want %s", got, want)
+	}
+	if got, want := v.NetWorth.String(), "220.0000 BRL"; got != want {
+		t.Errorf("NetWorth = %s, want %s", got, want)
+	}
+}
+
+func TestNetWorthTotalGainNegativeAndPartial(t *testing.T) {
+	// A USD unrealized loss with NO rate is excluded from TotalGain and flags
+	// USD in Missing; the BRL unrealized loss still totals (partial, signed).
+	in := ValuationInput{
+		Holdings:   []money.Money{brl("40.0000"), usd("20.0000")},
+		Unrealized: []money.Money{brl("-5.0000"), usd("-3.0000")},
+	}
+	v := NetWorth(money.BRL, in, nil)
+
+	if got, want := v.TotalGain.String(), "-5.0000 BRL"; got != want {
+		t.Errorf("TotalGain = %s, want %s (USD excluded, BRL loss kept)", got, want)
+	}
+	if len(v.Missing) != 1 || v.Missing[0] != money.USD {
+		t.Errorf("Missing = %v, want [USD]", v.Missing)
+	}
+}
+
 func TestNetWorthConvertThenSumRoundsOnce(t *testing.T) {
 	// Two USD holdings of 1.0000 at rate 1.23455 BRL/USD. Convert-then-sum rounds
 	// ONCE at the end: 1.23455 + 1.23455 = 2.46910 → 2.4691 BRL.

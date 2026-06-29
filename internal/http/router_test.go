@@ -521,11 +521,40 @@ func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.p
 // Portfolio (or err when set).
 type stubValuation struct {
 	portfolio valuation.Portfolio
+	dashboard valuation.Dashboard
 	err       error
 }
 
 func (s *stubValuation) Portfolio(context.Context) (valuation.Portfolio, error) {
 	return s.portfolio, s.err
+}
+
+func (s *stubValuation) Dashboard(context.Context) (valuation.Dashboard, error) {
+	return s.dashboard, s.err
+}
+
+// cannedDashboard is the default KPI row served in handler tests: a gain with no
+// prior sample (→ "—"), and value cards with up / down / flat deltas.
+func cannedDashboard() valuation.Dashboard {
+	return valuation.Dashboard{
+		Display: money.BRL,
+		NetWorth: valuation.KPI{
+			Value:    money.New(decimal.RequireFromString("1234.5000"), money.BRL),
+			DeltaPct: decimal.RequireFromString("2.0"), DeltaUp: true, HasDelta: true,
+		},
+		Portfolio: valuation.KPI{
+			Value:    money.New(decimal.RequireFromString("800.0000"), money.BRL),
+			DeltaPct: decimal.RequireFromString("-1.1"), DeltaDown: true, HasDelta: true,
+		},
+		GainLoss: valuation.KPI{
+			Value:    money.New(decimal.RequireFromString("100.0000"), money.BRL),
+			Positive: true, // HasDelta false → "—"
+		},
+		Cash: valuation.KPI{
+			Value:    money.New(decimal.RequireFromString("434.5000"), money.BRL),
+			DeltaPct: decimal.RequireFromString("0.0"), HasDelta: true,
+		},
+	}
 }
 
 // cannedPortfolio is the default portfolio served in handler tests: one priced
@@ -569,7 +598,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
-		Valuation:     &stubValuation{portfolio: cannedPortfolio()},
+		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -739,6 +768,88 @@ func TestInvestmentsPageWarnings(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("/investments warnings missing %q", want)
 		}
+	}
+}
+
+func TestDashboardRendersKPIs(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/", nil), cookie))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authed GET / = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	// Four KPI labels + their Display-Currency figures.
+	for _, want := range []string{
+		"Net worth", "1234.5000 BRL",
+		"Portfolio value", "800.0000 BRL",
+		"Total gain/loss", "100.0000 BRL",
+		"Cash", "434.5000 BRL",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	// Per-card deltas: up arrow + magnitude, down arrow + magnitude, and a "—" for
+	// the gain card (no prior sample).
+	for _, want := range []string{"▲", "2.0%", "▼", "1.1%", "0.0%", "—"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard delta missing %q", want)
+		}
+	}
+}
+
+func TestDashboardLossCardSingleMinus(t *testing.T) {
+	// A negative Total Gain/Loss must render exactly one minus: the Amount
+	// primitive supplies the "−" glyph, so the figure is the magnitude — never a
+	// double sign ("−-100.0000 BRL").
+	deps := testDeps(true, nil)
+	d := cannedDashboard()
+	d.GainLoss = valuation.KPI{
+		Value:    money.New(decimal.RequireFromString("-100.0000"), money.BRL),
+		Negative: true,
+	}
+	deps.Valuation = &stubValuation{portfolio: cannedPortfolio(), dashboard: d}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/", nil), cookie))
+	body := rec.Body.String()
+	for _, bad := range []string{"−-100.0000", "- -100.0000", "−  -100.0000"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("loss card double-renders the sign (%q present)", bad)
+		}
+	}
+	// Magnitude + loss colour + the single − sign from the primitive.
+	for _, want := range []string{"100.0000 BRL", "text-loss", "−"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("loss card missing %q", want)
+		}
+	}
+}
+
+func TestDashboardErrorBanner(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{err: valuation.ErrOversold}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/", nil), cookie))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("dashboard (oversold) = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "sell exceeds the quantity held") {
+		t.Errorf("dashboard error banner missing oversold hint")
 	}
 }
 

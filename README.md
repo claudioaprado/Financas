@@ -295,6 +295,20 @@ layer does no math, AD-1). For accessibility (NFR-4), gain/loss is conveyed by a
 alone. Epic 5's dashboard widgets (5.2 KPI cards, 5.3 chart, 5.4 allocation, 5.5
 history + insight) compose these primitives.
 
+The **Dashboard** (`/`, the post-login landing page) is the first of those widgets
+(Story 5.2, FR-11/UX-DR2): a row of four **KPI cards** — Net Worth, Portfolio
+Value, Total Gain/Loss (total **unrealized** G/L; realized stays per-currency on
+`/investments`), and Cash — each in the Display Currency with an icon chip, a
+large number (the `Amount` primitive), and a **period-change delta** (▲/▼ %). The
+delta's baseline is the portfolio value computed **as of the prior sample date** —
+the second-most-recent distinct Price/Exchange-Rate effective date (the sample
+before the one the current value reflects) — derived from the effective-dated
+history with **no snapshot table** (AD-11); it shows **"—"** until a comparable
+prior sample exists. All aggregation (Cash, Total Gain/Loss, the
+percentage change) lives in `domain` (AD-10) and is decimal, never float (NFR-5);
+the handler only formats. Partial-total notices (missing rate / unpriced) mirror
+`/investments` so a figure is never silently wrong.
+
 ## Money & decimal correctness
 
 All monetary and quantity values use `github.com/shopspring/decimal` — **never

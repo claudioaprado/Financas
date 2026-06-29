@@ -68,6 +68,39 @@ type MoneyText struct {
 	Negative bool
 }
 
+// DeltaText is a KPI card's pre-formatted period-change delta (Story 5.2). Display
+// is the magnitude percentage (e.g. "2.0%") — the Up/Down arrow carries the
+// direction, so the value never relies on colour alone (NFR-4). None renders the
+// "—" empty state shown until a comparable prior sample exists (UX-DR8).
+type DeltaText struct {
+	Display string
+	Up      bool
+	Down    bool
+	None    bool
+}
+
+// KPICardView is one dashboard summary card (UX-DR2): an icon chip, a muted
+// label, the large number (rendered via the Amount primitive with currency +
+// sign), and the period-change delta. Icon is a kind key the template maps to a
+// small inline glyph. Amount carries the pre-formatted money + gain/loss flags.
+type KPICardView struct {
+	Label  string
+	Icon   string
+	Amount MoneyText
+	Delta  DeltaText
+}
+
+// DashboardView is the read model for the KPI card row (Story 5.2). Cards is the
+// ordered row (Net Worth, Portfolio Value, Total Gain/Loss, Cash). MissingCodes /
+// UnpricedSymbols carry the partial-total notices (same as /investments). When
+// ErrMsg is set only the error banner renders.
+type DashboardView struct {
+	Cards           []KPICardView
+	MissingCodes    string
+	UnpricedSymbols string
+	ErrMsg          string
+}
+
 // ShellData carries the chrome state for the authenticated app shell.
 type ShellData struct {
 	OwnerName       string // shown in the greeting header
