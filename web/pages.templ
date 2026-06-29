@@ -154,7 +154,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 // register, with an add/edit form and per-row delete (Story 3.1). The balance is
 // derived on read by domain.AccountBalance (AD-2/AD-10); the signed amounts are
 // presentation only.
-templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, txns []TxRow, editing bool, edit TxRow, errMsg string) {
+templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, txns []TxRow, editing bool, edit TxRow, transferTargets []TransferTarget, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
@@ -217,6 +217,36 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					<a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-sm text-accent hover:underline">Cancel</a>
 				}
 			</form>
+			if len(transferTargets) > 0 {
+				<h2 class="mt-6 text-sm font-semibold text-muted">Transfer to another account</h2>
+				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transfer") } class="mt-2 flex flex-wrap items-end gap-2">
+					<div>
+						<label class="block text-xs" for="to_account_id">To account</label>
+						<select id="to_account_id" name="to_account_id" class="rounded border px-2 py-1">
+							for _, tt := range transferTargets {
+								<option value={ accountID(tt.ID) }>{ tt.Name } ({ tt.Currency })</option>
+							}
+						</select>
+					</div>
+					<div>
+						<label class="block text-xs" for="from_amount">Amount ({ currency })</label>
+						<input id="from_amount" name="from_amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="to_amount">Received</label>
+						<input id="to_amount" name="to_amount" inputmode="decimal" placeholder="if diff. currency" class="w-32 rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="transfer_date">Date</label>
+						<input id="transfer_date" name="date" type="date" required class="rounded border px-2 py-1"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="transfer_desc">Description</label>
+						<input id="transfer_desc" name="description" class="w-40 rounded border px-2 py-1"/>
+					</div>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Transfer</button>
+				</form>
+			}
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
@@ -235,11 +265,24 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 						<tr class="border-t border-black/5">
 							<td class="py-1">{ tr.Date }</td>
 							<td>{ tr.Type }</td>
-							<td>{ tr.Description }</td>
-							<td class={ "text-right", templ.KV("text-gain", tr.IsIncome), templ.KV("text-loss", !tr.IsIncome) }>{ tr.Signed }</td>
+							<td>
+								{ tr.Description }
+								if tr.Counterparty != "" {
+									<span class="text-muted">
+										if tr.Incoming {
+											· from { tr.Counterparty }
+										} else {
+											· to { tr.Counterparty }
+										}
+									</span>
+								}
+							</td>
+							<td class={ "text-right", templ.KV("text-gain", tr.Incoming), templ.KV("text-loss", !tr.Incoming) }>{ tr.Signed }</td>
 							<td>
 								<div class="flex items-center justify-end gap-2">
-									<a href={ templ.URL("/accounts/" + accountID(acctID) + "?edit=" + accountID(tr.ID)) } class="rounded border px-2 py-1">Edit</a>
+									if tr.Editable {
+										<a href={ templ.URL("/accounts/" + accountID(acctID) + "?edit=" + accountID(tr.ID)) } class="rounded border px-2 py-1">Edit</a>
+									}
 									<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/delete") }>
 										<input type="hidden" name="tx_id" value={ accountID(tr.ID) }/>
 										<button class="rounded border px-2 py-1" type="submit">Delete</button>

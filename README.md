@@ -147,6 +147,17 @@ refund (income) reduces it. Because the underlying balance stays signed (a credi
 account's is negative), a credit balance reduces Net Worth automatically in
 Epic 4.
 
+**Transfers** between your own accounts are **one** ledger row carrying both
+`from_account`/`to_account` and `from_amount`/`to_amount` (AD-9) — so nothing is
+double-counted. A same-currency transfer has `from_amount == to_amount`; a
+**cross-currency** transfer records both legs (each in its account's native
+currency; the rate is implicit and not stored). The row debits the source and
+credits the destination, so a transfer into a credit account reduces its balance
+owed (paying the card). Open an account's detail page to transfer to another
+account; a transfer shows in both registers (a debit on the source, a credit on
+the destination, with the other account named) and is corrected by delete +
+re-create.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

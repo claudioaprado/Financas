@@ -33,17 +33,28 @@ type AccountRow struct {
 	Archived     bool
 }
 
-// TxRow is one transaction formatted for the account register. Amount is the
+// TxRow is one transaction formatted for an account's register. Amount is the
 // raw magnitude (for editing); Signed is the display string with a +/- sign and
-// currency derived from Type (presentation only, never recomputed math).
+// currency derived from the account's perspective. Incoming (a credit to this
+// account) drives green/red styling. Counterparty names the other account for
+// transfers; Editable is false for transfers (corrected via delete + recreate).
 type TxRow struct {
-	ID          int64
-	Type        string // "income" | "expense"
-	Date        string // YYYY-MM-DD
-	Description string
-	Amount      string // magnitude, for the edit form
-	Signed      string // e.g. "+100.0000 USD" / "-30.0000 USD"
-	IsIncome    bool   // drives green/red styling
+	ID           int64
+	Type         string // "income" | "expense" | "transfer"
+	Date         string // YYYY-MM-DD
+	Description  string
+	Counterparty string // other account name (transfers only)
+	Amount       string // magnitude, for the edit form
+	Signed       string // e.g. "+100.0000 USD" / "-30.0000 USD"
+	Incoming     bool   // true when the row credits this account
+	Editable     bool   // income/expense only
+}
+
+// TransferTarget is a destination account option in the transfer form.
+type TransferTarget struct {
+	ID       int64
+	Name     string
+	Currency string
 }
 
 // NavItem is one top-navigation entry.

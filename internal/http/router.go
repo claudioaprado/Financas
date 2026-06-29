@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/a-h/templ"
@@ -68,6 +69,7 @@ type Transactions interface {
 	Record(ctx context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
 	Edit(ctx context.Context, accountID, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) error
 	Delete(ctx context.Context, txID int64) error
+	Transfer(ctx context.Context, fromID, toID int64, fromAmount, toAmount decimal.Decimal, date time.Time, description string) error
 	Balance(ctx context.Context, accountID int64) (money.Money, error)
 	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
 }
@@ -138,6 +140,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts/{id}/transaction", txCreate(deps))
 		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
 		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
+		pr.Post("/accounts/{id}/transfer", txTransfer(deps))
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -383,6 +386,43 @@ func txDelete(deps Deps) http.HandlerFunc {
 	}
 }
 
+func txTransfer(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		toID, idErr := strconv.ParseInt(req.PostFormValue("to_account_id"), 10, 64)
+		fromAmount, faErr := decimal.NewFromString(req.PostFormValue("from_amount"))
+		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
+		if idErr != nil || faErr != nil || dErr != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Enter a destination, a valid amount, and a date.", http.StatusBadRequest)
+			return
+		}
+		// The received amount is optional (blank ⇒ same-currency); a non-empty
+		// value must parse.
+		toAmount := decimal.Zero
+		if raw := strings.TrimSpace(req.PostFormValue("to_amount")); raw != "" {
+			parsed, err := decimal.NewFromString(raw)
+			if err != nil {
+				renderAccountDetail(deps, w, req, acctID, 0, "Enter a valid received amount.", http.StatusBadRequest)
+				return
+			}
+			toAmount = parsed
+		}
+		if err := deps.Transactions.Transfer(req.Context(), acctID, toID, fromAmount, toAmount, date, req.PostFormValue("description")); err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "Could not transfer: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
+	}
+}
+
 // parsePathID reads the numeric {id} path parameter.
 func parsePathID(req *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
@@ -430,22 +470,23 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	editing := false
 	if txns, lErr := deps.Transactions.List(req.Context(), acctID); lErr == nil {
 		for _, t := range txns {
-			isIncome := t.Type == transaction.Income
-			sign := "+"
-			if !isIncome {
-				sign = "-"
+			sign := "-"
+			if t.Incoming {
+				sign = "+"
 			}
 			row := web.TxRow{
-				ID:          t.ID,
-				Type:        string(t.Type),
-				Date:        t.Date.Format("2006-01-02"),
-				Description: t.Description,
-				Amount:      t.Amount.String(),
-				Signed:      sign + money.New(t.Amount, acct.Currency).String(),
-				IsIncome:    isIncome,
+				ID:           t.ID,
+				Type:         string(t.Type),
+				Date:         t.Date.Format("2006-01-02"),
+				Description:  t.Description,
+				Counterparty: t.Counterparty,
+				Amount:       t.Amount.String(),
+				Signed:       sign + money.New(t.Amount, acct.Currency).String(),
+				Incoming:     t.Incoming,
+				Editable:     t.Type != transaction.Transfer,
 			}
 			rows = append(rows, row)
-			if editID != 0 && t.ID == editID {
+			if editID != 0 && t.ID == editID && row.Editable {
 				edit = row
 				editing = true
 			}
@@ -455,9 +496,21 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		edit = web.TxRow{Type: string(transaction.Income), Date: time.Now().Format("2006-01-02")}
 	}
 	types := []string{string(transaction.Income), string(transaction.Expense)}
+
+	// Transfer targets: the owner's other active accounts.
+	var targets []web.TransferTarget
+	if accts, aErr := deps.Accounts.List(req.Context(), false); aErr == nil {
+		for _, a := range accts {
+			if a.ID == acctID {
+				continue
+			}
+			targets = append(targets, web.TransferTarget{ID: a.ID, Name: a.Name, Currency: string(a.Currency)})
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, rows, editing, edit, errMsg).Render(req.Context(), w)
+	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, rows, editing, edit, targets, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

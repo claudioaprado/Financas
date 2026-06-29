@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,10 +136,12 @@ func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.
 	return out, nil
 }
 
-// stubTransactions is an in-memory Transactions for handler tests. It derives a
-// simple balance (USD) from its recorded rows.
+// stubTransactions is an in-memory Transactions for handler tests. Rows are
+// stored account-relatively (Incoming = credits that account); a transfer is two
+// rows sharing an id (one per account), so List/Balance stay account-relative
+// exactly like the real service. Balances are computed in USD.
 type stubTransactions struct {
-	txns   []transaction.Transaction
+	rows   []transaction.Transaction
 	nextID int64
 }
 
@@ -150,8 +153,8 @@ func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transa
 		return transaction.Transaction{}, transaction.ErrNonPositiveAmount
 	}
 	s.nextID++
-	t := transaction.Transaction{ID: s.nextID, Type: typ, AccountID: accountID, Amount: amount, Date: date, Description: desc}
-	s.txns = append(s.txns, t)
+	t := transaction.Transaction{ID: s.nextID, Type: typ, AccountID: accountID, Amount: amount, Incoming: typ == transaction.Income, Date: date, Description: desc}
+	s.rows = append(s.rows, t)
 	return t, nil
 }
 
@@ -162,9 +165,10 @@ func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ tran
 	if !amount.IsPositive() {
 		return transaction.ErrNonPositiveAmount
 	}
-	for i := range s.txns {
-		if s.txns[i].ID == txID {
-			s.txns[i].Type, s.txns[i].Amount, s.txns[i].Date, s.txns[i].Description = typ, amount, date, desc
+	for i := range s.rows {
+		if s.rows[i].ID == txID {
+			s.rows[i].Type, s.rows[i].Amount, s.rows[i].Incoming = typ, amount, typ == transaction.Income
+			s.rows[i].Date, s.rows[i].Description = date, desc
 			return nil
 		}
 	}
@@ -172,25 +176,52 @@ func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ tran
 }
 
 func (s *stubTransactions) Delete(_ context.Context, txID int64) error {
-	for i := range s.txns {
-		if s.txns[i].ID == txID {
-			s.txns = append(s.txns[:i], s.txns[i+1:]...)
-			return nil
+	kept := s.rows[:0]
+	found := false
+	for _, r := range s.rows {
+		if r.ID == txID {
+			found = true
+			continue
 		}
+		kept = append(kept, r)
 	}
-	return transaction.ErrTxNotFound
+	if !found {
+		return transaction.ErrTxNotFound
+	}
+	s.rows = kept
+	return nil
+}
+
+func (s *stubTransactions) Transfer(_ context.Context, fromID, toID int64, fromAmount, toAmount decimal.Decimal, date time.Time, desc string) error {
+	if fromID == toID {
+		return transaction.ErrSameAccount
+	}
+	if !fromAmount.IsPositive() {
+		return transaction.ErrNonPositiveAmount
+	}
+	to := toAmount
+	if to.IsZero() {
+		to = fromAmount // stub assumes same currency unless a received amount is given
+	}
+	s.nextID++
+	id := s.nextID
+	s.rows = append(s.rows,
+		transaction.Transaction{ID: id, Type: transaction.Transfer, AccountID: fromID, Amount: fromAmount, Incoming: false, Counterparty: fmt.Sprintf("acct%d", toID), Date: date, Description: desc},
+		transaction.Transaction{ID: id, Type: transaction.Transfer, AccountID: toID, Amount: to, Incoming: true, Counterparty: fmt.Sprintf("acct%d", fromID), Date: date, Description: desc},
+	)
+	return nil
 }
 
 func (s *stubTransactions) Balance(_ context.Context, accountID int64) (money.Money, error) {
 	net := decimal.Zero
-	for _, t := range s.txns {
-		if t.AccountID != accountID {
+	for _, r := range s.rows {
+		if r.AccountID != accountID {
 			continue
 		}
-		if t.Type == transaction.Income {
-			net = net.Add(t.Amount)
+		if r.Incoming {
+			net = net.Add(r.Amount)
 		} else {
-			net = net.Sub(t.Amount)
+			net = net.Sub(r.Amount)
 		}
 	}
 	return money.New(net, money.USD), nil
@@ -198,9 +229,9 @@ func (s *stubTransactions) Balance(_ context.Context, accountID int64) (money.Mo
 
 func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transaction.Transaction, error) {
 	out := []transaction.Transaction{}
-	for _, t := range s.txns {
-		if t.AccountID == accountID {
-			out = append(out, t)
+	for _, r := range s.rows {
+		if r.AccountID == accountID {
+			out = append(out, r)
 		}
 	}
 	return out, nil
@@ -627,6 +658,60 @@ func TestCreditAccountShowsBalanceOwed(t *testing.T) {
 	if !strings.Contains(body, "530.0000 USD") {
 		t.Errorf("credit detail should show the positive amount owed (530.0000 USD)")
 	}
+}
+
+func TestTransferMovesBothBalances(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	bodyOf := func(path string) string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	// Two cash USD accounts (ids 1 and 2).
+	post("/accounts", "name=Checking&type=cash&currency=USD", http.StatusSeeOther)
+	post("/accounts", "name=Savings&type=cash&currency=USD", http.StatusSeeOther)
+
+	// Transfer 200 from account 1 to account 2.
+	post("/accounts/1/transfer", "to_account_id=2&from_amount=200&date=2024-05-01&description=move", http.StatusSeeOther)
+
+	// Source shows -200 (one row, no double-count); destination shows +200.
+	src := bodyOf("/accounts/1")
+	if !strings.Contains(src, "-200.0000 USD") {
+		t.Errorf("source detail should reflect the outgoing -200.0000 USD")
+	}
+	if !strings.Contains(src, "transfer") {
+		t.Errorf("source register should list a transfer row")
+	}
+	dst := bodyOf("/accounts/2")
+	if !strings.Contains(dst, "+200.0000 USD") {
+		t.Errorf("destination register should show the incoming +200.0000 USD")
+	}
+
+	// The transfer row has no Edit control (corrected via delete + recreate).
+	if strings.Contains(dst, "?edit=") {
+		t.Errorf("transfer rows must not offer an Edit link")
+	}
+
+	// A same-account transfer is rejected without crashing.
+	post("/accounts/1/transfer", "to_account_id=1&from_amount=10&date=2024-05-02", http.StatusBadRequest)
 }
 
 func TestCSRFRejectsCrossOrigin(t *testing.T) {

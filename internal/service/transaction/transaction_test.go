@@ -156,3 +156,92 @@ func TestTransaction(t *testing.T) {
 		t.Errorf("delete missing tx = %v; want ErrTxNotFound", err)
 	}
 }
+
+func TestTransfer(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	mk := func(label string, typ account.AccountType, cur money.Currency) account.Account {
+		a, err := accts.Create(ctx, fmt.Sprintf("%s-%d", label, run), typ, cur)
+		if err != nil {
+			t.Fatalf("create %s: %v", label, err)
+		}
+		return a
+	}
+	bal := func(a account.Account) decimal.Decimal {
+		b, err := svc.Balance(ctx, a.ID)
+		if err != nil {
+			t.Fatalf("balance %d: %v", a.ID, err)
+		}
+		return b.Amount()
+	}
+
+	checking := mk("Checking", account.Cash, money.USD)
+	savings := mk("Savings", account.Cash, money.USD)
+	card := mk("Card", account.Credit, money.USD)
+	brl := mk("Brl", account.Cash, money.BRL)
+
+	// Same-currency: 200 Checking -> Savings. Source -200, dest +200; one row,
+	// from_amount == to_amount.
+	if err := svc.Transfer(ctx, checking.ID, savings.ID, decimal.RequireFromString("200"), decimal.Zero, d(t, "2024-04-01"), "move"); err != nil {
+		t.Fatalf("same-currency transfer: %v", err)
+	}
+	if !bal(checking).Equal(decimal.RequireFromString("-200")) || !bal(savings).Equal(decimal.RequireFromString("200")) {
+		t.Errorf("after transfer: checking=%s savings=%s; want -200 / 200", bal(checking), bal(savings))
+	}
+	rows, _ := svc.List(ctx, savings.ID)
+	if len(rows) != 1 || rows[0].Type != Transfer || rows[0].Counterparty != checking.Name || !rows[0].Incoming {
+		t.Errorf("savings register = %+v; want one incoming transfer from %q", rows, checking.Name)
+	}
+	if !rows[0].Amount.Equal(decimal.RequireFromString("200")) {
+		t.Errorf("transfer to_amount = %s; want 200 (same-currency from==to)", rows[0].Amount)
+	}
+
+	// Pay the card: 150 Checking -> Card reduces owed (card balance += 150 toward 0).
+	if err := svc.Transfer(ctx, checking.ID, card.ID, decimal.RequireFromString("150"), decimal.Zero, d(t, "2024-04-02"), "pay card"); err != nil {
+		t.Fatalf("transfer to credit: %v", err)
+	}
+	if !bal(card).Equal(decimal.RequireFromString("150")) { // credited the credit account (owed -150)
+		t.Errorf("card balance after payment = %s; want 150", bal(card))
+	}
+
+	// Cross-currency: 100 USD Checking -> 520 BRL. Source -100 USD, dest +520 BRL.
+	if err := svc.Transfer(ctx, checking.ID, brl.ID, decimal.RequireFromString("100"), decimal.RequireFromString("520"), d(t, "2024-04-03"), "fx"); err != nil {
+		t.Fatalf("cross-currency transfer: %v", err)
+	}
+	if !bal(brl).Equal(decimal.RequireFromString("520")) {
+		t.Errorf("brl balance = %s; want 520", bal(brl))
+	}
+	// Checking: -200 -150 -100 = -450.
+	if !bal(checking).Equal(decimal.RequireFromString("-450")) {
+		t.Errorf("checking after three transfers = %s; want -450", bal(checking))
+	}
+
+	// Validation.
+	if err := svc.Transfer(ctx, checking.ID, checking.ID, decimal.RequireFromString("10"), decimal.Zero, d(t, "2024-04-04"), ""); !errors.Is(err, ErrSameAccount) {
+		t.Errorf("same-account transfer = %v; want ErrSameAccount", err)
+	}
+	if err := svc.Transfer(ctx, checking.ID, -1, decimal.RequireFromString("10"), decimal.Zero, d(t, "2024-04-04"), ""); !errors.Is(err, ErrAccountNotFound) {
+		t.Errorf("missing dest = %v; want ErrAccountNotFound", err)
+	}
+	if err := svc.Transfer(ctx, checking.ID, savings.ID, decimal.RequireFromString("0"), decimal.Zero, d(t, "2024-04-04"), ""); !errors.Is(err, ErrNonPositiveAmount) {
+		t.Errorf("non-positive from = %v; want ErrNonPositiveAmount", err)
+	}
+	if err := svc.Transfer(ctx, checking.ID, savings.ID, decimal.RequireFromString("10"), decimal.RequireFromString("11"), d(t, "2024-04-04"), ""); !errors.Is(err, ErrSameCurrencyAmountMismatch) {
+		t.Errorf("same-currency mismatch = %v; want ErrSameCurrencyAmountMismatch", err)
+	}
+	if err := svc.Transfer(ctx, checking.ID, brl.ID, decimal.RequireFromString("10"), decimal.Zero, d(t, "2024-04-04"), ""); !errors.Is(err, ErrCrossCurrencyToAmountRequired) {
+		t.Errorf("cross-currency missing to = %v; want ErrCrossCurrencyToAmountRequired", err)
+	}
+}
