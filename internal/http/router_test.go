@@ -22,6 +22,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
+	"github.com/claudioaprado/financas/internal/service/valuation"
 )
 
 type stubAuth struct{ ok bool }
@@ -516,6 +517,43 @@ func (s *stubPrices) Add(_ context.Context, securityID int64, effective time.Tim
 
 func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.prices, nil }
 
+// stubValuation is an in-memory Valuation for handler tests. It returns a canned
+// Portfolio (or err when set).
+type stubValuation struct {
+	portfolio valuation.Portfolio
+	err       error
+}
+
+func (s *stubValuation) Portfolio(context.Context) (valuation.Portfolio, error) {
+	return s.portfolio, s.err
+}
+
+// cannedPortfolio is the default portfolio served in handler tests: one priced
+// BRL holding, Display-Currency Net Worth + Portfolio value, no warnings.
+func cannedPortfolio() valuation.Portfolio {
+	return valuation.Portfolio{
+		Display:        money.BRL,
+		NetWorth:       money.New(decimal.RequireFromString("1234.5000"), money.BRL),
+		PortfolioValue: money.New(decimal.RequireFromString("800.0000"), money.BRL),
+		RealizedByCurrency: []money.Money{
+			money.New(decimal.RequireFromString("80.0000"), money.BRL),
+		},
+		Holdings: []valuation.HoldingValuation{{
+			AccountName:    "Broker",
+			Symbol:         "PETR4",
+			Name:           "Petrobras",
+			Currency:       money.BRL,
+			Quantity:       decimal.RequireFromString("10"),
+			HasPrice:       true,
+			Price:          money.New(decimal.RequireFromString("80.0000"), money.BRL),
+			PriceDate:      time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+			Valuation:      money.New(decimal.RequireFromString("800.0000"), money.BRL),
+			CostBasis:      money.New(decimal.RequireFromString("700.0000"), money.BRL),
+			UnrealizedGain: money.New(decimal.RequireFromString("100.0000"), money.BRL),
+		}},
+	}
+}
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -531,6 +569,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
+		Valuation:     &stubValuation{portfolio: cannedPortfolio()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -650,8 +689,56 @@ func TestNavTargetAuthed(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authed GET /investments = %d, want 200", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Investments") || !strings.Contains(body, "Coming soon") {
+	if body := rec.Body.String(); !strings.Contains(body, "Investments") || !strings.Contains(body, "Net worth") {
 		t.Errorf("/investments page missing expected content")
+	}
+}
+
+func TestInvestmentsPageRendersPortfolio(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/investments", nil), cookie))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authed GET /investments = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	// Net Worth + Portfolio value (Display Currency) and a per-holding row.
+	for _, want := range []string{"Net worth", "1234.5000 BRL", "Portfolio value", "800.0000 BRL", "PETR4"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/investments page missing %q", want)
+		}
+	}
+}
+
+func TestInvestmentsPageWarnings(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{portfolio: valuation.Portfolio{
+		Display:        money.BRL,
+		NetWorth:       money.New(decimal.RequireFromString("500.0000"), money.BRL),
+		PortfolioValue: money.New(decimal.RequireFromString("300.0000"), money.BRL),
+		Missing:        []money.Currency{money.USD},
+		Unpriced:       []string{"VOO", "QQQ"},
+	}}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/investments", nil), cookie))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authed GET /investments = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	// Missing-rate warning links to /exchange-rates; unpriced note links to /prices.
+	for _, want := range []string{"excludes", "USD", "/exchange-rates", "VOO", "QQQ", "/prices"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/investments warnings missing %q", want)
+		}
 	}
 }
 

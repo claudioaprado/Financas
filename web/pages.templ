@@ -23,6 +23,90 @@ templ ComingSoon(data ShellData, title string) {
 	}
 }
 
+// InvestmentsPage is the portfolio & Net Worth view (Story 4.4): a Net Worth
+// hero + Portfolio value + cumulative realized G/L (Display Currency totals via
+// convert-then-sum), a missing-rate warning (partial total, never blocked), an
+// unpriced note, and the cross-account holdings table (each row native). When
+// ErrMsg is set only the error banner renders.
+templ InvestmentsPage(data ShellData, v InvestmentsView) {
+	@Shell(data) {
+		<section class="rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Investments</h1>
+			if v.ErrMsg != "" {
+				<p class="mt-4 rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ v.ErrMsg }</p>
+			} else {
+				<div class="mt-4">
+					<p class="text-sm text-muted">Net worth ({ v.Display })</p>
+					<p class="text-4xl font-bold">{ v.NetWorth }</p>
+				</div>
+				<div class="mt-4 flex flex-wrap gap-8">
+					<div>
+						<p class="text-sm text-muted">Portfolio value</p>
+						<p class="text-2xl font-semibold">{ v.PortfolioValue }</p>
+					</div>
+					if len(v.Realized) > 0 {
+						<div>
+							<p class="text-sm text-muted">Cumulative realized G/L</p>
+							<div class="mt-1 flex flex-wrap gap-2">
+								for _, c := range v.Realized {
+									<span class={ "rounded bg-black/5 px-2 py-0.5 text-sm font-medium", templ.KV("text-gain", c.Positive), templ.KV("text-loss", c.Negative) }>{ c.Amount }</span>
+								}
+							</div>
+						</div>
+					}
+				</div>
+				if v.MissingCodes != "" {
+					<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+						Net worth excludes <span class="font-semibold">{ v.MissingCodes }</span> — no rate to { v.Display }. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+					</p>
+				}
+				if v.UnpricedSymbols != "" {
+					<p class="mt-3 text-sm text-muted">
+						No price for <span class="font-medium">{ v.UnpricedSymbols }</span> — excluded from portfolio value. <a href="/prices" class="text-accent hover:underline">Add prices</a>
+					</p>
+				}
+				<h2 class="mt-6 text-sm font-semibold text-muted">Holdings</h2>
+				<table class="mt-2 w-full text-sm">
+					<thead>
+						<tr class="text-left text-muted">
+							<th class="py-1">Account</th>
+							<th>Security</th>
+							<th class="text-right">Quantity</th>
+							<th class="text-right">Price</th>
+							<th class="text-right">Market value</th>
+							<th class="text-right">Cost basis</th>
+							<th class="text-right">Unrealized G/L</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(v.Holdings) == 0 {
+							<tr><td colspan="7" class="py-2 text-muted">No holdings yet.</td></tr>
+						}
+						for _, h := range v.Holdings {
+							<tr class="border-t border-black/5">
+								<td class="py-1">{ h.Account }</td>
+								<td class="font-medium">{ h.Symbol } <span class="text-muted">{ h.Name }</span></td>
+								<td class="text-right">{ h.Quantity }</td>
+								if h.HasPrice {
+									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">as of { h.PriceDate }</span></td>
+									<td class="text-right">{ h.Valuation }</td>
+									<td class="text-right">{ h.CostBasis }</td>
+									<td class={ "text-right", templ.KV("text-gain", h.UnrealizedPositive), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
+								} else {
+									<td class="text-right text-muted">—</td>
+									<td class="text-right text-muted">—</td>
+									<td class="text-right">{ h.CostBasis }</td>
+									<td class="text-right text-muted">—</td>
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+	}
+}
+
 // SettingsPage lets the owner choose the Display Currency (Story 2.1). The
 // currencies are ISO-4217 codes; data.DisplayCurrency marks the current choice.
 templ SettingsPage(data ShellData, currencies []string) {

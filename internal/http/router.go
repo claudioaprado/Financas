@@ -30,6 +30,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
+	"github.com/claudioaprado/financas/internal/service/valuation"
 	"github.com/claudioaprado/financas/web"
 )
 
@@ -117,6 +118,13 @@ type Imports interface {
 	Commit(ctx context.Context, accountID int64, content string) (importer.Result, error)
 }
 
+// Valuation derives the cross-account portfolio & Net Worth in the Display
+// Currency (Story 4.4). Defined here (consumer side) and implemented by
+// service/valuation.
+type Valuation interface {
+	Portfolio(ctx context.Context) (valuation.Portfolio, error)
+}
+
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
 	Sessions      *scs.SessionManager
@@ -130,6 +138,7 @@ type Deps struct {
 	Categories    Categories
 	Securities    Securities
 	Imports       Imports
+	Valuation     Valuation
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -177,7 +186,7 @@ func NewRouter(deps Deps) http.Handler {
 	r.Group(func(pr chi.Router) {
 		pr.Use(requireAuth(deps.Sessions))
 		pr.Get("/", renderPage(deps, "dashboard", func(d web.ShellData) templ.Component { return web.DashboardPage(d) }))
-		pr.Get("/investments", renderPage(deps, "investments", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Investments") }))
+		pr.Get("/investments", investmentsPage(deps))
 		pr.Get("/transactions", transactionsRegister(deps))
 		pr.Get("/accounts", accountsForm(deps))
 		pr.Post("/accounts", accountsCreate(deps))
@@ -1132,6 +1141,74 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.InvestmentAccountDetailPage(shellData(deps, req.Context(), "accounts"), acct.ID, acct.Name, string(acct.Currency), balStr, errMsg, holdings, realized, oversold, securities, rows).Render(req.Context(), w)
+}
+
+// investmentsPage renders the cross-account portfolio & Net Worth view (Story
+// 4.4): Display-Currency Net Worth + Portfolio value (convert-then-sum, AD-12),
+// per-currency realized G/L, per-holding native valuation, and the partial-total
+// notices (missing rate / unpriced). The layer only renders — all money is
+// formatted by domain/service (AD-10/AD-1). A top-level load failure surfaces a
+// graceful banner rather than a blank page (oversold ledger gets a specific hint).
+func investmentsPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		p, err := deps.Valuation.Portfolio(req.Context())
+		if err != nil {
+			msg := "Could not load your portfolio right now. Please try again."
+			if errors.Is(err, valuation.ErrOversold) {
+				msg = "A sell exceeds the quantity held in an investment account — fix the offending trade so your portfolio can be valued."
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = web.InvestmentsPage(shellData(deps, req.Context(), "investments"), web.InvestmentsView{ErrMsg: msg}).Render(req.Context(), w)
+			return
+		}
+
+		view := web.InvestmentsView{
+			NetWorth:       p.NetWorth.String(),
+			PortfolioValue: p.PortfolioValue.String(),
+			Display:        string(p.Display),
+		}
+		for _, m := range p.RealizedByCurrency {
+			view.Realized = append(view.Realized, web.RealizedChip{
+				Amount:   m.String(),
+				Positive: m.Amount().IsPositive(),
+				Negative: m.Amount().IsNegative(),
+			})
+		}
+		if len(p.Missing) > 0 {
+			codes := make([]string, len(p.Missing))
+			for i, c := range p.Missing {
+				codes[i] = string(c)
+			}
+			view.MissingCodes = strings.Join(codes, ", ")
+		}
+		if len(p.Unpriced) > 0 {
+			view.UnpricedSymbols = strings.Join(p.Unpriced, ", ")
+		}
+		for _, h := range p.Holdings {
+			row := web.PortfolioHoldingRow{
+				Account:   h.AccountName,
+				Symbol:    h.Symbol,
+				Name:      h.Name,
+				Currency:  string(h.Currency),
+				Quantity:  h.Quantity.String(),
+				CostBasis: h.CostBasis.String(),
+				HasPrice:  h.HasPrice,
+			}
+			if h.HasPrice {
+				row.Price = h.Price.String()
+				row.PriceDate = h.PriceDate.Format("2006-01-02")
+				row.Valuation = h.Valuation.String()
+				row.UnrealizedGain = h.UnrealizedGain.String()
+				row.UnrealizedPositive = h.UnrealizedGain.Amount().IsPositive()
+				row.UnrealizedNegative = h.UnrealizedGain.Amount().IsNegative()
+			}
+			view.Holdings = append(view.Holdings, row)
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = web.InvestmentsPage(shellData(deps, req.Context(), "investments"), view).Render(req.Context(), w)
+	}
 }
 
 // shellData builds the shared shell state, including the current Display

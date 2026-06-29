@@ -194,7 +194,25 @@ value** (`quantity × price`), **unrealized gain/loss** (market value − cost b
 and the price used with its effective date (so staleness is visible); a holding
 with no price shows "—". All of these are in the holding's own native currency
 (same-currency-only means no FX here) — the Display-Currency portfolio total and
-**Net Worth** arrive with Story 4.4.
+**Net Worth** are the **Investments** page below.
+
+**Portfolio & Net Worth** (`/investments`) is the cross-account view. It lists
+every active investment account's holdings (account, security, quantity, price as
+of its date, market value, cost basis, unrealized G/L) in each holding's **native
+currency**, and shows the **Net Worth** and **Portfolio value** in the **Display
+Currency**. Those two totals are the single canonical figures from
+`domain.NetWorth`: Net Worth is all cash + holdings − credit owed, with
+**archived accounts excluded**; both convert each native amount to the Display
+Currency **convert-then-sum** (each amount converted at full precision via the
+owner's directional rate, summed, then rounded once with banker's rounding —
+AD-12), never rebasing stored amounts. **Cumulative realized G/L** is shown per
+native currency (gain green / loss red). When a native currency has **no rate to
+the Display Currency**, it is excluded from the totals and the page shows a
+**partial Net Worth** plus a prompt to add the rate (`/exchange-rates`) — it is
+never blocked, inverted, or guessed (AD-6). A held position with **no price** is
+excluded from the Portfolio value and noted with a link to add prices
+(`/prices`). The KPI dashboard, value-over-time chart, and allocation arrive in
+Epic 5 (they reuse this same `domain.NetWorth`).
 
 **The register** (`/transactions`) lists every account's transactions
 newest-first, with signed colored amounts (green income / red expense; transfers

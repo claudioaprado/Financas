@@ -27,6 +27,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
+	"github.com/claudioaprado/financas/internal/service/valuation"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -81,6 +82,7 @@ func main() {
 			Categories:    category.New(pool),
 			Securities:    security.New(pool),
 			Imports:       importer.New(pool),
+			Valuation:     valuation.New(pool),
 			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

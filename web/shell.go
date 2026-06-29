@@ -78,6 +78,50 @@ type HoldingRow struct {
 	UnrealizedNegative bool   // drives red styling when the unrealized G/L is a loss (zero = neither, neutral)
 }
 
+// InvestmentsView is the portfolio page read model (Story 4.4): the
+// Display-Currency Net Worth + Portfolio value, the per-currency realized G/L
+// chips, the cross-account holdings table (each row in its native currency), and
+// the partial-total notices. All money is pre-formatted in the handler (the view
+// does no math, AD-10/AD-1). When ErrMsg is set the page renders only the error
+// banner (a top-level page must surface a load failure, not swallow it).
+type InvestmentsView struct {
+	NetWorth        string         // Display Currency
+	PortfolioValue  string         // Display Currency
+	Display         string         // ISO-4217 code of the Display Currency
+	Realized        []RealizedChip // cumulative realized G/L, one chip per native currency
+	MissingCodes    string         // joined codes excluded from the totals (no rate); empty when none
+	UnpricedSymbols string         // joined held symbols with no price; empty when none
+	Holdings        []PortfolioHoldingRow
+	ErrMsg          string // when set, the page renders only this error banner
+}
+
+// RealizedChip is one cumulative-realized-G/L chip (per native currency). The
+// colour flags mirror the 4.3 convention (gain green / loss red / zero neutral).
+type RealizedChip struct {
+	Amount   string
+	Positive bool
+	Negative bool
+}
+
+// PortfolioHoldingRow is one holding on the cross-account portfolio table, in
+// its native currency (same-currency-only — only the page totals are converted).
+// The price-dependent fields are populated only when HasPrice is true.
+type PortfolioHoldingRow struct {
+	Account            string
+	Symbol             string
+	Name               string
+	Currency           string
+	Quantity           string
+	HasPrice           bool
+	Price              string // latest price (native), e.g. "110.0000 BRL"
+	PriceDate          string // effective date of that price, e.g. "2026-06-01"
+	Valuation          string // market value (qty × price), native
+	CostBasis          string // native
+	UnrealizedGain     string // market value − cost basis, native
+	UnrealizedPositive bool   // gain → green
+	UnrealizedNegative bool   // loss → red (zero = neither, neutral)
+}
+
 // PriceRow is one effective-dated security price on the prices page (Story 4.3),
 // pre-formatted for display.
 type PriceRow struct {
