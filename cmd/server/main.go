@@ -20,6 +20,7 @@ import (
 	apphttp "github.com/claudioaprado/financas/internal/http"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/auth"
+	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
@@ -73,6 +74,7 @@ func main() {
 			ExchangeRates: exchangerate.New(pool),
 			Accounts:      account.New(pool),
 			Transactions:  transaction.New(pool),
+			Categories:    category.New(pool),
 			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

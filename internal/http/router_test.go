@@ -15,6 +15,7 @@ import (
 
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 )
@@ -145,7 +146,7 @@ type stubTransactions struct {
 	nextID int64
 }
 
-func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string) (transaction.Transaction, error) {
+func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, categoryID int64) (transaction.Transaction, error) {
 	if !typ.IsValid() {
 		return transaction.Transaction{}, transaction.ErrInvalidType
 	}
@@ -153,12 +154,12 @@ func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transa
 		return transaction.Transaction{}, transaction.ErrNonPositiveAmount
 	}
 	s.nextID++
-	t := transaction.Transaction{ID: s.nextID, Type: typ, AccountID: accountID, Amount: amount, Incoming: typ == transaction.Income, Date: date, Description: desc}
+	t := transaction.Transaction{ID: s.nextID, Type: typ, AccountID: accountID, Amount: amount, Incoming: typ == transaction.Income, CategoryID: categoryID, Date: date, Description: desc}
 	s.rows = append(s.rows, t)
 	return t, nil
 }
 
-func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string) error {
+func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, categoryID int64) error {
 	if !typ.IsValid() {
 		return transaction.ErrInvalidType
 	}
@@ -168,11 +169,25 @@ func (s *stubTransactions) Edit(_ context.Context, _ int64, txID int64, typ tran
 	for i := range s.rows {
 		if s.rows[i].ID == txID {
 			s.rows[i].Type, s.rows[i].Amount, s.rows[i].Incoming = typ, amount, typ == transaction.Income
-			s.rows[i].Date, s.rows[i].Description = date, desc
+			s.rows[i].Date, s.rows[i].Description, s.rows[i].CategoryID = date, desc, categoryID
 			return nil
 		}
 	}
 	return transaction.ErrTxNotFound
+}
+
+func (s *stubTransactions) CategoryTransactions(_ context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error) {
+	var out []transaction.CategoryTxn
+	var amts []money.Money
+	for _, r := range s.rows {
+		if r.CategoryID != categoryID {
+			continue
+		}
+		m := money.New(r.Amount, money.USD)
+		out = append(out, transaction.CategoryTxn{ID: r.ID, AccountID: r.AccountID, Date: r.Date, Description: r.Description, Amount: m})
+		amts = append(amts, m)
+	}
+	return out, amts, nil
 }
 
 func (s *stubTransactions) Delete(_ context.Context, txID int64) error {
@@ -237,6 +252,50 @@ func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transacti
 	return out, nil
 }
 
+// stubCategories is an in-memory Categories for handler tests.
+type stubCategories struct {
+	cats   []category.Category
+	usage  map[int64]int64
+	nextID int64
+}
+
+func (s *stubCategories) Create(_ context.Context, name string, kind category.Kind) (category.Category, error) {
+	if strings.TrimSpace(name) == "" {
+		return category.Category{}, category.ErrEmptyName
+	}
+	if !kind.IsValid() {
+		return category.Category{}, category.ErrInvalidKind
+	}
+	s.nextID++
+	c := category.Category{ID: s.nextID, Name: name, Kind: kind}
+	s.cats = append(s.cats, c)
+	return c, nil
+}
+
+func (s *stubCategories) List(_ context.Context) ([]category.Category, error) { return s.cats, nil }
+
+func (s *stubCategories) ListWithUsage(_ context.Context) ([]category.CategoryUsage, error) {
+	out := make([]category.CategoryUsage, 0, len(s.cats))
+	for _, c := range s.cats {
+		out = append(out, category.CategoryUsage{Category: c, Count: s.usage[c.ID]})
+	}
+	return out, nil
+}
+
+func (s *stubCategories) Delete(_ context.Context, id int64, force bool) error {
+	if s.usage[id] > 0 && !force {
+		return category.ErrCategoryInUse
+	}
+	for i := range s.cats {
+		if s.cats[i].ID == id {
+			s.cats = append(s.cats[:i], s.cats[i+1:]...)
+			delete(s.usage, id)
+			return nil
+		}
+	}
+	return category.ErrNotFound
+}
+
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 func testDeps(authOK bool, ready ReadyCheck) Deps {
@@ -248,6 +307,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		ExchangeRates: &stubExchangeRates{},
 		Accounts:      &stubAccounts{},
 		Transactions:  &stubTransactions{},
+		Categories:    &stubCategories{usage: map[int64]int64{}},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -712,6 +772,57 @@ func TestTransferMovesBothBalances(t *testing.T) {
 
 	// A same-account transfer is rejected without crashing.
 	post("/accounts/1/transfer", "to_account_id=1&from_amount=10&date=2024-05-02", http.StatusBadRequest)
+}
+
+func TestCategoriesPageAndGuardedDelete(t *testing.T) {
+	deps := testDeps(true, nil)
+	cats := &stubCategories{usage: map[int64]int64{}}
+	deps.Categories = cats
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string, want int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		if rec.Code != want {
+			t.Fatalf("POST %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+	body := func(path string) string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/categories", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth GET /categories = %d, want 303", recUnauth.Code)
+	}
+
+	// Create a category (becomes id 1) and see it listed.
+	post("/categories", "name=Food&kind=expense", http.StatusSeeOther)
+	if b := body("/categories"); !strings.Contains(b, "Food") || !strings.Contains(b, "expense") {
+		t.Errorf("categories page missing the created category")
+	}
+
+	// Mark it in use: a plain delete is refused (400), force succeeds.
+	cats.usage[1] = 2
+	post("/categories/delete", "id=1", http.StatusBadRequest)
+	post("/categories/delete", "id=1&force=true", http.StatusSeeOther)
+	if b := body("/categories"); strings.Contains(b, "Food") {
+		t.Errorf("category should be gone after force delete")
+	}
 }
 
 func TestCSRFRejectsCrossOrigin(t *testing.T) {

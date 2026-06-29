@@ -72,11 +72,11 @@ func TestTransaction(t *testing.T) {
 	}
 
 	// Income 100, expense 30 -> 70.
-	inc, err := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("100"), d(t, "2024-01-05"), "salary")
+	inc, err := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("100"), d(t, "2024-01-05"), "salary", 0)
 	if err != nil {
 		t.Fatalf("record income: %v", err)
 	}
-	exp, err := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("30"), d(t, "2024-01-06"), "groceries")
+	exp, err := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("30"), d(t, "2024-01-06"), "groceries", 0)
 	if err != nil {
 		t.Fatalf("record expense: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestTransaction(t *testing.T) {
 	}
 
 	// Edit the expense 30 -> 50 -> balance 50.
-	if err := svc.Edit(ctx, cash.ID, exp.ID, Expense, decimal.RequireFromString("50"), d(t, "2024-01-06"), "groceries"); err != nil {
+	if err := svc.Edit(ctx, cash.ID, exp.ID, Expense, decimal.RequireFromString("50"), d(t, "2024-01-06"), "groceries", 0); err != nil {
 		t.Fatalf("edit expense: %v", err)
 	}
 	wantBalance("after editing expense to 50", "50")
@@ -117,13 +117,13 @@ func TestTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create credit account: %v", err)
 	}
-	if _, err := svc.Record(ctx, credit.ID, Expense, decimal.RequireFromString("200"), d(t, "2024-01-07"), "tv"); err != nil {
+	if _, err := svc.Record(ctx, credit.ID, Expense, decimal.RequireFromString("200"), d(t, "2024-01-07"), "tv", 0); err != nil {
 		t.Fatalf("expense on credit: %v", err)
 	}
 	if bal, err := svc.Balance(ctx, credit.ID); err != nil || !bal.Amount().Equal(decimal.RequireFromString("-200")) {
 		t.Errorf("credit balance after expense = %v, %v; want -200 (owed 200)", bal.Amount(), err)
 	}
-	if _, err := svc.Record(ctx, credit.ID, Income, decimal.RequireFromString("50"), d(t, "2024-01-08"), "refund"); err != nil {
+	if _, err := svc.Record(ctx, credit.ID, Income, decimal.RequireFromString("50"), d(t, "2024-01-08"), "refund", 0); err != nil {
 		t.Fatalf("refund on credit: %v", err)
 	}
 	if bal, err := svc.Balance(ctx, credit.ID); err != nil || !bal.Amount().Equal(decimal.RequireFromString("-150")) {
@@ -135,25 +135,96 @@ func TestTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create investment account: %v", err)
 	}
-	if _, err := svc.Record(ctx, invest.ID, Expense, decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrUnsupportedAccountType) {
+	if _, err := svc.Record(ctx, invest.ID, Expense, decimal.RequireFromString("10"), d(t, "2024-01-07"), "", 0); !errors.Is(err, ErrUnsupportedAccountType) {
 		t.Errorf("expense on investment = %v; want ErrUnsupportedAccountType", err)
 	}
 
 	// Validation.
-	if _, err := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("0"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrNonPositiveAmount) {
+	if _, err := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("0"), d(t, "2024-01-07"), "", 0); !errors.Is(err, ErrNonPositiveAmount) {
 		t.Errorf("zero amount = %v; want ErrNonPositiveAmount", err)
 	}
-	if _, err := svc.Record(ctx, cash.ID, TxType("transfer"), decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrInvalidType) {
+	if _, err := svc.Record(ctx, cash.ID, TxType("transfer"), decimal.RequireFromString("10"), d(t, "2024-01-07"), "", 0); !errors.Is(err, ErrInvalidType) {
 		t.Errorf("invalid type = %v; want ErrInvalidType", err)
 	}
-	if _, err := svc.Record(ctx, -1, Income, decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrAccountNotFound) {
+	if _, err := svc.Record(ctx, -1, Income, decimal.RequireFromString("10"), d(t, "2024-01-07"), "", 0); !errors.Is(err, ErrAccountNotFound) {
 		t.Errorf("missing account = %v; want ErrAccountNotFound", err)
 	}
-	if err := svc.Edit(ctx, cash.ID, -1, Income, decimal.RequireFromString("10"), d(t, "2024-01-07"), ""); !errors.Is(err, ErrTxNotFound) {
+	if err := svc.Edit(ctx, cash.ID, -1, Income, decimal.RequireFromString("10"), d(t, "2024-01-07"), "", 0); !errors.Is(err, ErrTxNotFound) {
 		t.Errorf("edit missing tx = %v; want ErrTxNotFound", err)
 	}
 	if err := svc.Delete(ctx, -1); !errors.Is(err, ErrTxNotFound) {
 		t.Errorf("delete missing tx = %v; want ErrTxNotFound", err)
+	}
+}
+
+func TestCategoryAssignment(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	usd, err := accts.Create(ctx, fmt.Sprintf("CatUSD-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create usd account: %v", err)
+	}
+	brl, err := accts.Create(ctx, fmt.Sprintf("CatBRL-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create brl account: %v", err)
+	}
+
+	// Create an expense category directly via store (avoids importing service/category).
+	cat, err := store.New(pool).CreateCategory(ctx, store.CreateCategoryParams{Name: fmt.Sprintf("Food-%d", run), Kind: "expense"})
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+
+	// Assigning an expense category to an income is rejected.
+	if _, err := svc.Record(ctx, usd.ID, Income, decimal.RequireFromString("100"), d(t, "2024-06-01"), "x", cat.ID); !errors.Is(err, ErrCategoryKindMismatch) {
+		t.Errorf("expense category on income = %v; want ErrCategoryKindMismatch", err)
+	}
+	// A missing category is rejected.
+	if _, err := svc.Record(ctx, usd.ID, Expense, decimal.RequireFromString("100"), d(t, "2024-06-01"), "x", -1); !errors.Is(err, ErrCategoryNotFound) {
+		t.Errorf("missing category = %v; want ErrCategoryNotFound", err)
+	}
+
+	// Assign it to two expenses in different currencies.
+	if _, err := svc.Record(ctx, usd.ID, Expense, decimal.RequireFromString("30"), d(t, "2024-06-01"), "lunch", cat.ID); err != nil {
+		t.Fatalf("record usd expense: %v", err)
+	}
+	if _, err := svc.Record(ctx, brl.ID, Expense, decimal.RequireFromString("70"), d(t, "2024-06-02"), "jantar", cat.ID); err != nil {
+		t.Fatalf("record brl expense: %v", err)
+	}
+
+	// The register row carries the resolved category name.
+	rows, _ := svc.List(ctx, usd.ID)
+	if len(rows) == 0 || rows[0].CategoryID != cat.ID || rows[0].CategoryName != cat.Name {
+		t.Errorf("usd register row = %+v; want category %d/%q", rows, cat.ID, cat.Name)
+	}
+
+	// CategoryTransactions returns both rows and per-currency totals.
+	txns, totals, err := svc.CategoryTransactions(ctx, cat.ID)
+	if err != nil {
+		t.Fatalf("category transactions: %v", err)
+	}
+	if len(txns) != 2 {
+		t.Errorf("category txns = %d; want 2", len(txns))
+	}
+	got := map[money.Currency]decimal.Decimal{}
+	for _, m := range totals {
+		got[m.Currency()] = m.Amount()
+	}
+	if !got[money.USD].Equal(decimal.RequireFromString("30")) || !got[money.BRL].Equal(decimal.RequireFromString("70")) {
+		t.Errorf("category totals = %v; want 30 USD, 70 BRL", got)
 	}
 }
 

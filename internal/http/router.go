@@ -22,6 +22,7 @@ import (
 	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/web"
@@ -66,12 +67,22 @@ type Accounts interface {
 // income/expense. Defined here (consumer side) and implemented by
 // service/transaction.
 type Transactions interface {
-	Record(ctx context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
-	Edit(ctx context.Context, accountID, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string) error
+	Record(ctx context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string, categoryID int64) (transaction.Transaction, error)
+	Edit(ctx context.Context, accountID, txID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, description string, categoryID int64) error
 	Delete(ctx context.Context, txID int64) error
 	Transfer(ctx context.Context, fromID, toID int64, fromAmount, toAmount decimal.Decimal, date time.Time, description string) error
 	Balance(ctx context.Context, accountID int64) (money.Money, error)
 	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
+	CategoryTransactions(ctx context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error)
+}
+
+// Categories creates, lists, and deletes income/expense categories. Defined here
+// (consumer side) and implemented by service/category.
+type Categories interface {
+	Create(ctx context.Context, name string, kind category.Kind) (category.Category, error)
+	List(ctx context.Context) ([]category.Category, error)
+	ListWithUsage(ctx context.Context) ([]category.CategoryUsage, error)
+	Delete(ctx context.Context, id int64, force bool) error
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -83,6 +94,7 @@ type Deps struct {
 	ExchangeRates ExchangeRates
 	Accounts      Accounts
 	Transactions  Transactions
+	Categories    Categories
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -141,6 +153,10 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
 		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
 		pr.Post("/accounts/{id}/transfer", txTransfer(deps))
+		pr.Get("/categories", categoriesPage(deps))
+		pr.Post("/categories", categoriesCreate(deps))
+		pr.Post("/categories/delete", categoriesDelete(deps))
+		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -328,12 +344,12 @@ func txCreate(deps Deps) http.HandlerFunc {
 			http.NotFound(w, req)
 			return
 		}
-		typ, amount, date, desc, ok := parseTxForm(req)
+		typ, amount, date, desc, catID, ok := parseTxForm(req)
 		if !ok {
 			renderAccountDetail(deps, w, req, acctID, 0, "Enter a valid amount and date.", http.StatusBadRequest)
 			return
 		}
-		if _, err := deps.Transactions.Record(req.Context(), acctID, typ, amount, date, desc); err != nil {
+		if _, err := deps.Transactions.Record(req.Context(), acctID, typ, amount, date, desc, catID); err != nil {
 			renderAccountDetail(deps, w, req, acctID, 0, "Could not add transaction: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -353,12 +369,12 @@ func txEdit(deps Deps) http.HandlerFunc {
 			renderAccountDetail(deps, w, req, acctID, 0, "Invalid transaction id.", http.StatusBadRequest)
 			return
 		}
-		typ, amount, date, desc, ok := parseTxForm(req)
+		typ, amount, date, desc, catID, ok := parseTxForm(req)
 		if !ok {
 			renderAccountDetail(deps, w, req, acctID, txID, "Enter a valid amount and date.", http.StatusBadRequest)
 			return
 		}
-		if err := deps.Transactions.Edit(req.Context(), acctID, txID, typ, amount, date, desc); err != nil {
+		if err := deps.Transactions.Edit(req.Context(), acctID, txID, typ, amount, date, desc, catID); err != nil {
 			renderAccountDetail(deps, w, req, acctID, txID, "Could not save transaction: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -423,6 +439,101 @@ func txTransfer(deps Deps) http.HandlerFunc {
 	}
 }
 
+func categoriesPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderCategories(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func categoriesCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		name := req.PostFormValue("name")
+		kind := category.Kind(req.PostFormValue("kind"))
+		if _, err := deps.Categories.Create(req.Context(), name, kind); err != nil {
+			renderCategories(deps, w, req, "Could not create category: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/categories", http.StatusSeeOther)
+	}
+}
+
+func categoriesDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderCategories(deps, w, req, "Invalid category id.", http.StatusBadRequest)
+			return
+		}
+		force := req.PostFormValue("force") == "true"
+		if err := deps.Categories.Delete(req.Context(), id, force); err != nil {
+			renderCategories(deps, w, req, "Could not delete category: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/categories", http.StatusSeeOther)
+	}
+}
+
+func renderCategories(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var rows []web.CategoryRow
+	if cs, err := deps.Categories.ListWithUsage(req.Context()); err == nil {
+		for _, c := range cs {
+			rows = append(rows, web.CategoryRow{ID: c.ID, Name: c.Name, Kind: string(c.Kind), Count: c.Count})
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.CategoriesPage(shellData(deps, req.Context(), "settings"), rows, errMsg).Render(req.Context(), w)
+}
+
+func categorySummary(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		// Resolve the category name from the list (no single-Get on the iface).
+		name := ""
+		var kind string
+		if cs, err := deps.Categories.List(req.Context()); err == nil {
+			for _, c := range cs {
+				if c.ID == id {
+					name, kind = c.Name, string(c.Kind)
+				}
+			}
+		}
+		if name == "" {
+			http.NotFound(w, req)
+			return
+		}
+		var rows []web.CategoryTxRow
+		var totals []string
+		if txns, sums, err := deps.Transactions.CategoryTransactions(req.Context(), id); err == nil {
+			for _, t := range txns {
+				rows = append(rows, web.CategoryTxRow{
+					Account:     t.AccountName,
+					Date:        t.Date.Format("2006-01-02"),
+					Description: t.Description,
+					Amount:      t.Amount.String(),
+				})
+			}
+			for _, m := range sums {
+				totals = append(totals, m.String())
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = web.CategorySummaryPage(shellData(deps, req.Context(), "settings"), name, kind, rows, totals).Render(req.Context(), w)
+	}
+}
+
 // parsePathID reads the numeric {id} path parameter.
 func parsePathID(req *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
@@ -431,17 +542,19 @@ func parsePathID(req *http.Request) (int64, bool) {
 
 // parseTxForm parses the shared transaction form fields (type/amount/date/
 // description). Amount is parsed as a decimal string, never a float (AD-4).
-func parseTxForm(req *http.Request) (typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, ok bool) {
+func parseTxForm(req *http.Request) (typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, categoryID int64, ok bool) {
 	if err := req.ParseForm(); err != nil {
-		return "", decimal.Decimal{}, time.Time{}, "", false
+		return "", decimal.Decimal{}, time.Time{}, "", 0, false
 	}
 	typ = transaction.TxType(req.PostFormValue("type"))
 	amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
 	date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 	if aErr != nil || dErr != nil {
-		return "", decimal.Decimal{}, time.Time{}, "", false
+		return "", decimal.Decimal{}, time.Time{}, "", 0, false
 	}
-	return typ, amount, date, req.PostFormValue("description"), true
+	// category_id is optional (blank ⇒ 0 ⇒ uncategorized).
+	catID, _ := strconv.ParseInt(req.PostFormValue("category_id"), 10, 64)
+	return typ, amount, date, req.PostFormValue("description"), catID, true
 }
 
 func accountPath(id int64) string { return "/accounts/" + strconv.FormatInt(id, 10) }
@@ -480,6 +593,8 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 				Date:         t.Date.Format("2006-01-02"),
 				Description:  t.Description,
 				Counterparty: t.Counterparty,
+				Category:     t.CategoryName,
+				CategoryID:   t.CategoryID,
 				Amount:       t.Amount.String(),
 				Signed:       sign + money.New(t.Amount, acct.Currency).String(),
 				Incoming:     t.Incoming,
@@ -508,9 +623,19 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		}
 	}
 
+	// Category options for the income/expense form.
+	var cats []web.CategoryOption
+	if deps.Categories != nil {
+		if cs, cErr := deps.Categories.List(req.Context()); cErr == nil {
+			for _, c := range cs {
+				cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, rows, editing, edit, targets, errMsg).Render(req.Context(), w)
+	_ = web.AccountDetailPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Type), string(acct.Currency), balLabel, balStr, types, cats, rows, editing, edit, targets, errMsg).Render(req.Context(), w)
 }
 
 // shellData builds the shared shell state, including the current Display

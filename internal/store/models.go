@@ -25,6 +25,13 @@ type AppSetting struct {
 	DisplayCurrency string
 }
 
+type Category struct {
+	ID        int64
+	Name      string
+	Kind      string
+	CreatedAt pgtype.Timestamptz
+}
+
 type Currency struct {
 	Code string
 	Name string
@@ -49,4 +56,5 @@ type Transaction struct {
 	OccurredOn    time.Time
 	Description   string
 	CreatedAt     pgtype.Timestamptz
+	CategoryID    pgtype.Int8
 }

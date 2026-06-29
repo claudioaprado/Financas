@@ -42,6 +42,7 @@ templ SettingsPage(data ShellData, currencies []string) {
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Save</button>
 			</form>
 			<p class="mt-4 text-sm"><a href="/exchange-rates" class="text-accent hover:underline">Manage exchange rates →</a></p>
+			<p class="mt-1 text-sm"><a href="/categories" class="text-accent hover:underline">Manage categories →</a></p>
 		</section>
 	}
 }
@@ -154,7 +155,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 // register, with an add/edit form and per-row delete (Story 3.1). The balance is
 // derived on read by domain.AccountBalance (AD-2/AD-10); the signed amounts are
 // presentation only.
-templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, txns []TxRow, editing bool, edit TxRow, transferTargets []TransferTarget, errMsg string) {
+templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, categories []CategoryOption, txns []TxRow, editing bool, edit TxRow, transferTargets []TransferTarget, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
@@ -206,6 +207,17 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					<label class="block text-xs" for="description">Description</label>
 					<input id="description" name="description" value={ edit.Description } class="w-48 rounded border px-2 py-1"/>
 				</div>
+				if len(categories) > 0 {
+					<div>
+						<label class="block text-xs" for="category_id">Category</label>
+						<select id="category_id" name="category_id" class="rounded border px-2 py-1">
+							<option value="">— none —</option>
+							for _, c := range categories {
+								<option value={ accountID(c.ID) } selected?={ edit.CategoryID == c.ID }>{ c.Name } ({ c.Kind })</option>
+							}
+						</select>
+					</div>
+				}
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">
 					if editing {
 						Save
@@ -276,6 +288,9 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 										}
 									</span>
 								}
+								if tr.Category != "" {
+									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ tr.Category }</span>
+								}
 							</td>
 							<td class={ "text-right", templ.KV("text-gain", tr.Incoming), templ.KV("text-loss", !tr.Incoming) }>{ tr.Signed }</td>
 							<td>
@@ -289,6 +304,116 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 									</form>
 								</div>
 							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// CategoriesPage manages income/expense categories (Story 3.4): a create form
+// and a list with usage counts and guarded delete (a category in use offers a
+// "delete and unassign" action).
+templ CategoriesPage(data ShellData, categories []CategoryRow, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Categories</h1>
+			<p class="mt-1 text-sm text-muted">Income- and expense-typed labels for your transactions. An income category attaches only to income, an expense category only to expense.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<form method="post" action="/categories" class="mt-4 flex flex-wrap items-end gap-2">
+				<div>
+					<label class="block text-xs" for="name">Name</label>
+					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="kind">Kind</label>
+					<select id="kind" name="kind" class="rounded border px-2 py-1">
+						<option value="expense">expense</option>
+						<option value="income">income</option>
+					</select>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Create category</button>
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Name</th>
+						<th>Kind</th>
+						<th>In use</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(categories) == 0 {
+						<tr><td colspan="4" class="py-2 text-muted">No categories yet.</td></tr>
+					}
+					for _, c := range categories {
+						<tr class="border-t border-black/5">
+							<td class="py-1"><a href={ templ.URL("/categories/" + accountID(c.ID)) } class="text-accent hover:underline">{ c.Name }</a></td>
+							<td>{ c.Kind }</td>
+							<td>{ countLabel(c.Count) }</td>
+							<td>
+								<div class="flex items-center justify-end gap-2">
+									<form method="post" action="/categories/delete">
+										<input type="hidden" name="id" value={ accountID(c.ID) }/>
+										<button class="rounded border px-2 py-1" type="submit">Delete</button>
+									</form>
+									if c.Count > 0 {
+										<form method="post" action="/categories/delete">
+											<input type="hidden" name="id" value={ accountID(c.ID) }/>
+											<input type="hidden" name="force" value="true"/>
+											<button class="rounded border border-loss px-2 py-1 text-loss" type="submit">Delete &amp; unassign</button>
+										</form>
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// CategorySummaryPage lists a category's transactions and per-currency totals
+// (Story 3.4). Cross-currency Display-Currency totals are Epic 5.
+templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRow, totals []string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categories</a></p>
+			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
+			<p class="text-sm text-muted">{ kind }</p>
+			<div class="mt-4">
+				<p class="text-sm text-muted">Totals</p>
+				if len(totals) == 0 {
+					<p class="text-muted">—</p>
+				}
+				for _, tot := range totals {
+					<p class="text-xl font-bold">{ tot }</p>
+				}
+			</div>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Date</th>
+						<th>Account</th>
+						<th>Description</th>
+						<th class="text-right">Amount</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(txns) == 0 {
+						<tr><td colspan="4" class="py-2 text-muted">No transactions in this category.</td></tr>
+					}
+					for _, tr := range txns {
+						<tr class="border-t border-black/5">
+							<td class="py-1">{ tr.Date }</td>
+							<td>{ tr.Account }</td>
+							<td>{ tr.Description }</td>
+							<td class="text-right">{ tr.Amount }</td>
 						</tr>
 					}
 				</tbody>

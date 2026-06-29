@@ -58,6 +58,9 @@ var (
 	ErrSameAccount                   = errors.New("transaction: transfer source and destination must differ")
 	ErrSameCurrencyAmountMismatch    = errors.New("transaction: same-currency transfer must have equal amounts")
 	ErrCrossCurrencyToAmountRequired = errors.New("transaction: cross-currency transfer needs a destination amount")
+	// Category errors (Story 3.4).
+	ErrCategoryNotFound     = errors.New("transaction: category not found")
+	ErrCategoryKindMismatch = errors.New("transaction: category kind must match the transaction type")
 )
 
 // Transaction is one row formatted for a specific account's register. Amount is
@@ -72,6 +75,8 @@ type Transaction struct {
 	Amount       decimal.Decimal
 	Incoming     bool
 	Counterparty string
+	CategoryID   int64  // 0 when uncategorized
+	CategoryName string // resolved for display
 	Date         time.Time
 	Description  string
 	CreatedAt    time.Time
@@ -90,8 +95,12 @@ func New(pool *pgxpool.Pool) *Service {
 
 // Record validates and appends an income or expense on a cash account, returning
 // the stored row. It writes inside one transaction (AD-3).
-func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amount decimal.Decimal, date time.Time, description string) (Transaction, error) {
+func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amount decimal.Decimal, date time.Time, description string, categoryID int64) (Transaction, error) {
 	if err := s.validate(ctx, accountID, typ, amount); err != nil {
+		return Transaction{}, err
+	}
+	catID, err := s.resolveCategory(ctx, categoryID, typ)
+	if err != nil {
 		return Transaction{}, err
 	}
 
@@ -110,6 +119,7 @@ func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amoun
 		ToAmount:      toAmt,
 		OccurredOn:    date,
 		Description:   description,
+		CategoryID:    catID,
 	})
 	if err != nil {
 		return Transaction{}, fmt.Errorf("transaction: insert: %w", err)
@@ -117,13 +127,17 @@ func (s *Service) Record(ctx context.Context, accountID int64, typ TxType, amoun
 	if err := tx.Commit(ctx); err != nil {
 		return Transaction{}, fmt.Errorf("transaction: commit: %w", err)
 	}
-	return toTransaction(accountID, row, nil), nil // income/expense: no counterpart
+	return toTransaction(accountID, row, nil, nil), nil // income/expense: no counterpart
 }
 
 // Edit updates an existing income/expense on the given cash account. The from/to
 // placement is recomputed from the new type. A missing id returns ErrTxNotFound.
-func (s *Service) Edit(ctx context.Context, accountID, txID int64, typ TxType, amount decimal.Decimal, date time.Time, description string) error {
+func (s *Service) Edit(ctx context.Context, accountID, txID int64, typ TxType, amount decimal.Decimal, date time.Time, description string, categoryID int64) error {
 	if err := s.validate(ctx, accountID, typ, amount); err != nil {
+		return err
+	}
+	catID, err := s.resolveCategory(ctx, categoryID, typ)
+	if err != nil {
 		return err
 	}
 
@@ -143,6 +157,7 @@ func (s *Service) Edit(ctx context.Context, accountID, txID int64, typ TxType, a
 		ToAmount:      toAmt,
 		OccurredOn:    date,
 		Description:   description,
+		CategoryID:    catID,
 	})
 	if err != nil {
 		return fmt.Errorf("transaction: update: %w", err)
@@ -231,6 +246,7 @@ func (s *Service) Transfer(ctx context.Context, fromID, toID int64, fromAmount, 
 		ToAmount:      finalTo,
 		OccurredOn:    date,
 		Description:   description,
+		CategoryID:    pgtype.Int8{}, // transfers are never categorized
 	}); err != nil {
 		return fmt.Errorf("transaction: insert transfer: %w", err)
 	}
@@ -279,9 +295,13 @@ func (s *Service) List(ctx context.Context, accountID int64) ([]Transaction, err
 	if err != nil {
 		return nil, err
 	}
+	catNames, err := categoryNames(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Transaction, len(rows))
 	for i, r := range rows {
-		out[i] = toTransaction(accountID, r, names)
+		out[i] = toTransaction(accountID, r, names, catNames)
 	}
 	return out, nil
 }
@@ -298,6 +318,84 @@ func accountNames(ctx context.Context, q *store.Queries) (map[int64]string, erro
 		names[a.ID] = a.Name
 	}
 	return names, nil
+}
+
+// categoryNames builds an id->name map for resolving a row's category label.
+func categoryNames(ctx context.Context, q *store.Queries) (map[int64]string, error) {
+	cats, err := q.ListCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: list categories: %w", err)
+	}
+	names := make(map[int64]string, len(cats))
+	for _, c := range cats {
+		names[c.ID] = c.Name
+	}
+	return names, nil
+}
+
+// resolveCategory validates an optional category assignment (0 = none): the
+// category must exist and its kind must match the transaction type. Returns the
+// nullable id to store.
+func (s *Service) resolveCategory(ctx context.Context, categoryID int64, typ TxType) (pgtype.Int8, error) {
+	if categoryID == 0 {
+		return pgtype.Int8{}, nil
+	}
+	cat, err := store.New(s.pool).GetCategory(ctx, categoryID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.Int8{}, ErrCategoryNotFound
+	}
+	if err != nil {
+		return pgtype.Int8{}, fmt.Errorf("transaction: get category: %w", err)
+	}
+	if cat.Kind != string(typ) {
+		return pgtype.Int8{}, ErrCategoryKindMismatch
+	}
+	return idParam(categoryID), nil
+}
+
+// CategoryTxn is one of a category's transactions, with its account and amount
+// (in that account's native currency) for the category summary.
+type CategoryTxn struct {
+	ID          int64
+	AccountID   int64
+	AccountName string
+	Date        time.Time
+	Description string
+	Amount      money.Money
+}
+
+// CategoryTransactions returns the transactions assigned to a category and their
+// per-currency totals (no conversion — AD-12/Display-Currency totals are Epic 5).
+func (s *Service) CategoryTransactions(ctx context.Context, categoryID int64) ([]CategoryTxn, []money.Money, error) {
+	q := store.New(s.pool)
+	rows, err := q.ListCategoryTransactions(ctx, idParam(categoryID))
+	if err != nil {
+		return nil, nil, fmt.Errorf("transaction: list category: %w", err)
+	}
+	accts, err := q.ListAllAccounts(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("transaction: list accounts: %w", err)
+	}
+	name := make(map[int64]string, len(accts))
+	cur := make(map[int64]money.Currency, len(accts))
+	for _, a := range accts {
+		name[a.ID], cur[a.ID] = a.Name, money.Currency(a.Currency)
+	}
+
+	out := make([]CategoryTxn, 0, len(rows))
+	amounts := make([]money.Money, 0, len(rows))
+	for _, r := range rows {
+		// A categorized row is income (credits to_account) or expense (debits
+		// from_account); its amount is in that account's currency.
+		acctID, amt := nullID(r.ToAccountID), r.ToAmount
+		if TxType(r.Type) == Expense {
+			acctID, amt = nullID(r.FromAccountID), r.FromAmount
+		}
+		m := money.New(amt, cur[acctID])
+		out = append(out, CategoryTxn{ID: r.ID, AccountID: acctID, AccountName: name[acctID], Date: r.OccurredOn, Description: r.Description, Amount: m})
+		amounts = append(amounts, m)
+	}
+	return out, domain.SumByCurrency(amounts), nil
 }
 
 // validate checks the account exists and is a cash account, and that the type
@@ -335,14 +433,17 @@ func legs(accountID int64, typ TxType, amount decimal.Decimal) (from, to pgtype.
 // perspective: crediting the account (income, or transfer in) is Incoming with
 // the to_amount; debiting it (expense, or transfer out) uses the from_amount.
 // For transfers, Counterparty is the other account's name.
-func toTransaction(accountID int64, r store.Transaction, names map[int64]string) Transaction {
+func toTransaction(accountID int64, r store.Transaction, names, catNames map[int64]string) Transaction {
+	catID := nullID(r.CategoryID)
 	t := Transaction{
-		ID:          r.ID,
-		Type:        TxType(r.Type),
-		AccountID:   accountID,
-		Date:        r.OccurredOn,
-		Description: r.Description,
-		CreatedAt:   r.CreatedAt.Time,
+		ID:           r.ID,
+		Type:         TxType(r.Type),
+		AccountID:    accountID,
+		CategoryID:   catID,
+		CategoryName: catNames[catID],
+		Date:         r.OccurredOn,
+		Description:  r.Description,
+		CreatedAt:    r.CreatedAt.Time,
 	}
 	fromID, toID := nullID(r.FromAccountID), nullID(r.ToAccountID)
 	if toID == accountID {

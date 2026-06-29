@@ -158,6 +158,14 @@ account; a transfer shows in both registers (a debit on the source, a credit on
 the destination, with the other account named) and is corrected by delete +
 re-create.
 
+**Categories** (`/categories`, linked from Settings) are income- or
+expense-typed labels you assign to income/expense transactions — an income
+category attaches only to income, an expense category only to expense (enforced
+in the service). A category's summary page lists its transactions and a total
+**per currency** (cross-currency Display-Currency totals come in Epic 5). Deletes
+are guarded: a category in use can't be removed until you reassign its
+transactions, or use **delete and unassign**, which clears it from them first.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

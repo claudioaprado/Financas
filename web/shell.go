@@ -5,6 +5,9 @@ import "strconv"
 // accountID renders an account's numeric id as a string for use in form fields.
 func accountID(id int64) string { return strconv.FormatInt(id, 10) }
 
+// countLabel renders a usage count for display.
+func countLabel(n int64) string { return strconv.FormatInt(n, 10) }
+
 // ShellData carries the chrome state for the authenticated app shell.
 type ShellData struct {
 	OwnerName       string // shown in the greeting header
@@ -44,6 +47,8 @@ type TxRow struct {
 	Date         string // YYYY-MM-DD
 	Description  string
 	Counterparty string // other account name (transfers only)
+	Category     string // assigned category name (income/expense only)
+	CategoryID   int64  // for pre-selecting on edit
 	Amount       string // magnitude, for the edit form
 	Signed       string // e.g. "+100.0000 USD" / "-30.0000 USD"
 	Incoming     bool   // true when the row credits this account
@@ -55,6 +60,30 @@ type TransferTarget struct {
 	ID       int64
 	Name     string
 	Currency string
+}
+
+// CategoryOption is a category choice in the income/expense form (kind groups
+// the options so the owner picks a matching one).
+type CategoryOption struct {
+	ID   int64
+	Name string
+	Kind string // "income" | "expense"
+}
+
+// CategoryRow is one category on the categories page, with its usage count.
+type CategoryRow struct {
+	ID    int64
+	Name  string
+	Kind  string
+	Count int64
+}
+
+// CategoryTxRow is one transaction in a category summary.
+type CategoryTxRow struct {
+	Account     string
+	Date        string
+	Description string
+	Amount      string // formatted money, e.g. "30.0000 USD"
 }
 
 // NavItem is one top-navigation entry.
