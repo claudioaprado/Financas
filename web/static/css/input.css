@@ -17,4 +17,16 @@
 	/* Shape — ~16px rounded cards with a soft shadow. */
 	--radius-card: 1rem;
 	--shadow-card: 0 8px 24px -12px oklch(0.21 0.02 255 / 0.18);
+
+	/* Type scale (UX-DR7) — semantic sizes for the dashboard's number hierarchy.
+	   These generate the text-hero / text-stat / text-label utilities; the
+	   component primitives (web/components.templ) are the single home that pairs
+	   each role with its size, so pages never re-pick sizes ad-hoc (AD-10).
+	   --text-hero matches the prior text-4xl hero so existing pages don't shift. */
+	--text-hero: 2.25rem;
+	--text-hero--line-height: 1.15;
+	--text-stat: 1.875rem;
+	--text-stat--line-height: 2.25rem;
+	--text-label: 0.875rem;
+	--text-label--line-height: 1.25rem;
 }

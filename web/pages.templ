@@ -30,19 +30,19 @@ templ ComingSoon(data ShellData, title string) {
 // ErrMsg is set only the error banner renders.
 templ InvestmentsPage(data ShellData, v InvestmentsView) {
 	@Shell(data) {
-		<section class="rounded-card bg-white p-6 shadow-card">
+		@Card("") {
 			<h1 class="text-2xl font-bold">Investments</h1>
 			if v.ErrMsg != "" {
 				<p class="mt-4 rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ v.ErrMsg }</p>
 			} else {
 				<div class="mt-4">
-					<p class="text-sm text-muted">Net worth ({ v.Display })</p>
-					<p class="text-4xl font-bold">{ v.NetWorth }</p>
+					<p class="text-label text-muted">Net worth ({ v.Display })</p>
+					@Amount(MoneyText{Display: v.NetWorth}, AmountHero)
 				</div>
 				<div class="mt-4 flex flex-wrap gap-8">
 					<div>
-						<p class="text-sm text-muted">Portfolio value</p>
-						<p class="text-2xl font-semibold">{ v.PortfolioValue }</p>
+						<p class="text-label text-muted">Portfolio value</p>
+						@Amount(MoneyText{Display: v.PortfolioValue}, AmountStat)
 					</div>
 					if len(v.Realized) > 0 {
 						<div>
@@ -103,7 +103,7 @@ templ InvestmentsPage(data ShellData, v InvestmentsView) {
 					</tbody>
 				</table>
 			}
-		</section>
+		}
 	}
 }
 

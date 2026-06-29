@@ -281,9 +281,19 @@ until their epics build them.
 
 The visual system (UX-DR7) lives as **Tailwind v4 `@theme` tokens** in
 `web/static/css/input.css`: a semantic palette (`gain` green / `loss` red /
-`accent`), neutral `surface`/`ink`/`muted` tones, `rounded-card` (~16px), and a
-soft `shadow-card`. Edit the tokens there and rerun `make css`. Story 5.1 extends
-this into card/badge/large-number component primitives.
+`accent`), neutral `surface`/`ink`/`muted` tones, `rounded-card` (~16px), a soft
+`shadow-card`, and a semantic **type scale** (`text-hero` / `text-stat` /
+`text-label`). Edit the tokens there and rerun `make css`.
+
+Over those tokens, `web/components.templ` provides the shared **component
+primitives** (Story 5.1, UX-DR8) — `Card`, `Badge`, and `Amount` (the
+large-number money component) — so pages compose them instead of re-styling
+ad-hoc (AD-10). `Amount` renders **pre-formatted** money with its currency and
+sign at a chosen size; money arrives already formatted from the handler (the web
+layer does no math, AD-1). For accessibility (NFR-4), gain/loss is conveyed by a
+**sign as well as colour** (a `+`/`−` plus a screen-reader label), never colour
+alone. Epic 5's dashboard widgets (5.2 KPI cards, 5.3 chart, 5.4 allocation, 5.5
+history + insight) compose these primitives.
 
 ## Money & decimal correctness
 

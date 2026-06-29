@@ -1,0 +1,40 @@
+package web
+
+// Reusable component primitives over the @theme design tokens (Story 5.1,
+// UX-DR7/UX-DR8). These are the single home for how a card, a badge, and a
+// money number look, so every page composes them instead of re-styling ad-hoc
+// (AD-10). The web layer renders only — money arrives pre-formatted from the
+// handler (AD-1); no arithmetic happens here. Accessibility defaults (NFR-4):
+// semantic markup, token contrast, and gain/loss conveyed by a SIGN as well as
+// colour (never colour alone).
+
+// Card wraps content in the canonical card surface (~16px radius, soft shadow).
+// The optional class extends it for variants (e.g. a tighter KPI card, an accent
+// insight card) without restyling the base.
+templ Card(class string) {
+	<section class={ "rounded-card bg-white p-6 shadow-card", class }>
+		{ children... }
+	</section>
+}
+
+// Badge is a small semantic pill (type chips, the insight badge). Its colour is
+// secondary information; the label always carries the meaning in text.
+templ Badge(label string, variant BadgeVariant) {
+	<span class={ "inline-flex items-center rounded-card px-2 py-0.5 text-xs font-medium", badgeClass(variant) }>{ label }</span>
+}
+
+// Amount renders a pre-formatted money value with its currency and sign (UX-DR8)
+// at the chosen type-scale size. A gain shows a leading "+" and a loss a leading
+// "−" — plus a screen-reader label — so the direction is never signalled by
+// colour alone (NFR-4). A neutral value (the default) shows no sign and no colour.
+templ Amount(m MoneyText, size AmountSize) {
+	<span class={ amountClass(size), "tabular-nums", templ.KV("text-gain", m.Positive), templ.KV("text-loss", m.Negative) }>
+		if m.Positive {
+			<span aria-hidden="true">+</span><span class="sr-only">gain </span>
+		}
+		if m.Negative {
+			<span aria-hidden="true">−</span><span class="sr-only">loss </span>
+		}
+		{ m.Display }
+	</span>
+}

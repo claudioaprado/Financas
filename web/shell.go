@@ -8,6 +8,66 @@ func accountID(id int64) string { return strconv.FormatInt(id, 10) }
 // countLabel renders a usage count for display.
 func countLabel(n int64) string { return strconv.FormatInt(n, 10) }
 
+// BadgeVariant selects a Badge's semantic colour (Story 5.1, UX-DR7 palette).
+type BadgeVariant string
+
+const (
+	BadgeNeutral BadgeVariant = "neutral"
+	BadgeGain    BadgeVariant = "gain"
+	BadgeLoss    BadgeVariant = "loss"
+	BadgeAccent  BadgeVariant = "accent"
+)
+
+// badgeClass maps a BadgeVariant to its token-driven colour classes.
+func badgeClass(v BadgeVariant) string {
+	switch v {
+	case BadgeGain:
+		return "bg-gain/10 text-gain"
+	case BadgeLoss:
+		return "bg-loss/10 text-loss"
+	case BadgeAccent:
+		return "bg-accent/10 text-accent"
+	default:
+		return "bg-black/5 text-muted"
+	}
+}
+
+// AmountSize selects the type-scale size of an Amount (Story 5.1, UX-DR7 scale):
+// AmountHero is the Net Worth / portfolio hero number, AmountStat a KPI-card
+// figure, AmountInline a value inside running text or a chip.
+type AmountSize string
+
+const (
+	AmountHero   AmountSize = "hero"
+	AmountStat   AmountSize = "stat"
+	AmountInline AmountSize = "inline"
+)
+
+// amountClass maps an AmountSize to its type-scale size + weight classes.
+func amountClass(s AmountSize) string {
+	switch s {
+	case AmountHero:
+		return "text-hero font-bold"
+	case AmountStat:
+		return "text-stat font-semibold"
+	default:
+		return "text-base font-medium"
+	}
+}
+
+// MoneyText is a pre-formatted monetary value for the Amount primitive (UX-DR8).
+// Display is the already-formatted string (e.g. "1234.5000 BRL" from
+// money.Money.String()); Positive/Negative are the gain/loss flags the handler
+// computes from the rounded amount (the 4.3/4.4 convention) — the web layer does
+// no math (AD-1). When neither flag is set the amount is neutral (no sign, no
+// colour); the sign Amount renders conveys gain/loss without relying on colour
+// alone (NFR-4).
+type MoneyText struct {
+	Display  string
+	Positive bool
+	Negative bool
+}
+
 // ShellData carries the chrome state for the authenticated app shell.
 type ShellData struct {
 	OwnerName       string // shown in the greeting header
