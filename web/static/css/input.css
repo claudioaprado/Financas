@@ -4,6 +4,11 @@
    extends it with card/badge/large-number component primitives. */
 @import "tailwindcss";
 
+/* Safelist the allocation slice utilities (Story 5.4): the arc stroke + legend
+   chip classes are built dynamically in Go (stroke-alloc-N / bg-alloc-N), so the
+   automatic source scan can't see them — list them explicitly. */
+@source inline("{stroke,bg}-alloc-{1,2,3,4,5,6,7,8}");
+
 @theme {
 	/* Semantic palette — green = gain/positive, red = loss/negative, one bold
 	   accent, plus light-theme surface + neutral text tones. */
@@ -13,6 +18,18 @@
 	--color-accent: oklch(0.55 0.16 264); /* bold call-out accent */
 	--color-gain: oklch(0.62 0.16 150); /* positive / gain */
 	--color-loss: oklch(0.585 0.21 25); /* negative / loss */
+
+	/* Allocation donut palette (Story 5.4) — calm, distinct categorical hues for
+	   the breakdown slices. Deliberately NOT green/red (reserved for gain/loss)
+	   and spread around the wheel so adjacent slices stay legible. */
+	--color-alloc-1: oklch(0.62 0.14 264); /* blue */
+	--color-alloc-2: oklch(0.68 0.13 200); /* cyan */
+	--color-alloc-3: oklch(0.70 0.13 70); /* gold */
+	--color-alloc-4: oklch(0.62 0.15 320); /* magenta */
+	--color-alloc-5: oklch(0.66 0.12 170); /* teal */
+	--color-alloc-6: oklch(0.60 0.15 290); /* violet */
+	--color-alloc-7: oklch(0.68 0.14 40); /* orange */
+	--color-alloc-8: oklch(0.58 0.13 230); /* indigo */
 
 	/* Shape — ~16px rounded cards with a soft shadow. */
 	--radius-card: 1rem;

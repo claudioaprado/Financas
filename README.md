@@ -320,6 +320,20 @@ the geometry computed in the http layer (the financial core stays float-free).
 Historical points that were missing a rate are flagged as partial; with fewer than
 two points the card shows a calm empty state until history accrues.
 
+Below the trend, an **allocation breakdown** (Story 5.4, FR-12/UX-DR4) shows how the
+**invested value** (Portfolio Value — priced holdings only; cash and liabilities
+excluded) is split, **by Security or by Account** via a `?by=` toggle. The split is a
+**server-rendered inline `<svg>` donut** (one `stroke-dasharray` arc per slice, a
+calm categorical colour each — never gain/loss) beside a legend. Percentages are
+computed from the **unrounded** converted values and **reconciled to exactly 100%**
+via the largest-remainder method (AD-12) — there is one canonical `domain.Allocate`
+for this (AD-10), pure decimal; the donut geometry lives in the http layer so the
+financial core stays float-free. The breakdown reuses the same convert-then-sum and
+the same rates as Net Worth, so its total reconciles with the Portfolio Value KPI.
+For legibility the smallest slices beyond the top eight fold into a single **"Other"**
+slice. A holding currency with no rate is excluded with a partial notice; with no
+priced holdings the card shows a calm empty state.
+
 ## Money & decimal correctness
 
 All monetary and quantity values use `github.com/shopspring/decimal` — **never

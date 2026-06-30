@@ -664,6 +664,176 @@ func TestValueSeriesPartialAndEmpty(t *testing.T) {
 	}
 }
 
+// TestAllocation exercises the invested-value breakdown: a BRL security worth
+// 1000 BRL and a USD security worth 1000 USD converting at USD→BRL = 4 (→ 4000
+// BRL). Total reconciles to PortfolioValue; percents sum to exactly 100; the
+// by=security and by=account dimensions group correctly; removing the rate
+// excludes USD as a partial total.
+func TestAllocation(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	rates := exchangerate.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	date := dateOnlyUTC(time.Now())
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+
+	// BRL security: buy 10 @ 100, price 100 → market value 1000 BRL.
+	brokerBRL, err := accts.Create(ctx, fmt.Sprintf("BrokerBRL-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create brokerBRL: %v", err)
+	}
+	brlSec, err := secs.Create(ctx, fmt.Sprintf("BRL%d", run), "BRL Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create brlSec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, brokerBRL.ID, brlSec.ID, req("10"), req("100"), req("0"), date, "buy brl"); err != nil {
+		t.Fatalf("buy brl: %v", err)
+	}
+	if _, err := prices.Add(ctx, brlSec.ID, date, req("100")); err != nil {
+		t.Fatalf("price brl: %v", err)
+	}
+
+	// USD security: buy 10 @ 100, price 100 → market value 1000 USD.
+	brokerUSD, err := accts.Create(ctx, fmt.Sprintf("BrokerUSD-%d", run), account.Investment, money.USD)
+	if err != nil {
+		t.Fatalf("create brokerUSD: %v", err)
+	}
+	usdSec, err := secs.Create(ctx, fmt.Sprintf("USD%d", run), "USD Stock", security.Stock, money.USD)
+	if err != nil {
+		t.Fatalf("create usdSec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, brokerUSD.ID, usdSec.ID, req("10"), req("100"), req("0"), date, "buy usd"); err != nil {
+		t.Fatalf("buy usd: %v", err)
+	}
+	if _, err := prices.Add(ctx, usdSec.ID, date, req("100")); err != nil {
+		t.Fatalf("price usd: %v", err)
+	}
+
+	// ---- Without a rate: USD is excluded (partial); only the BRL slice remains. ----
+	a, err := svc.Allocation(ctx, "security")
+	if err != nil {
+		t.Fatalf("allocation (no rate): %v", err)
+	}
+	if len(a.Groups) != 1 || a.Groups[0].Key != brlSec.Symbol || a.Groups[0].Percent != 100 {
+		t.Fatalf("allocation (no rate) groups = %+v, want a single %s=100", a.Groups, brlSec.Symbol)
+	}
+	if len(a.Missing) != 1 || a.Missing[0] != money.USD {
+		t.Errorf("allocation (no rate) Missing = %v, want [USD]", a.Missing)
+	}
+	if got := a.Total.String(); got != "1000.0000 BRL" {
+		t.Errorf("allocation (no rate) Total = %s, want 1000.0000 BRL", got)
+	}
+
+	// ---- With USD→BRL = 4: USD sec → 4000 BRL; total 5000; 80/20 split. ----
+	if _, err := rates.Add(ctx, money.USD, money.BRL, date, req("4")); err != nil {
+		t.Fatalf("add rate: %v", err)
+	}
+	bySec, err := svc.Allocation(ctx, "security")
+	if err != nil {
+		t.Fatalf("allocation (security): %v", err)
+	}
+	if got := bySec.Total.String(); got != "5000.0000 BRL" {
+		t.Errorf("Total = %s, want 5000.0000 BRL", got)
+	}
+	// Cross-check D4: Total == PortfolioValue.
+	p, err := svc.Portfolio(ctx)
+	if err != nil {
+		t.Fatalf("portfolio: %v", err)
+	}
+	if bySec.Total.String() != p.PortfolioValue.String() {
+		t.Errorf("Total %s != PortfolioValue %s (D4)", bySec.Total, p.PortfolioValue)
+	}
+	sum := 0
+	for _, g := range bySec.Groups {
+		sum += g.Percent
+	}
+	if sum != 100 {
+		t.Errorf("Σ percent = %d, want 100", sum)
+	}
+	if len(bySec.Groups) != 2 {
+		t.Fatalf("by-security groups = %d, want 2", len(bySec.Groups))
+	}
+	// Sorted value desc: USD sec (4000) first at 80%, BRL sec (1000) second at 20%.
+	if bySec.Groups[0].Key != usdSec.Symbol || bySec.Groups[0].Percent != 80 {
+		t.Errorf("group[0] = {%s, %d}, want {%s, 80}", bySec.Groups[0].Key, bySec.Groups[0].Percent, usdSec.Symbol)
+	}
+	if bySec.Groups[1].Key != brlSec.Symbol || bySec.Groups[1].Percent != 20 {
+		t.Errorf("group[1] = {%s, %d}, want {%s, 20}", bySec.Groups[1].Key, bySec.Groups[1].Percent, brlSec.Symbol)
+	}
+
+	// ---- by=account groups by investment account name. ----
+	byAcct, err := svc.Allocation(ctx, "account")
+	if err != nil {
+		t.Fatalf("allocation (account): %v", err)
+	}
+	if byAcct.By != "account" {
+		t.Errorf("By = %q, want account", byAcct.By)
+	}
+	if len(byAcct.Groups) != 2 || byAcct.Groups[0].Key != brokerUSD.Name || byAcct.Groups[0].Percent != 80 {
+		t.Errorf("by-account group[0] = %+v, want {%s, 80}", byAcct.Groups[0], brokerUSD.Name)
+	}
+}
+
+// TestAllocationEmpty: a portfolio with no priced holdings yields no groups.
+func TestAllocationEmpty(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	set := settings.New(pool)
+	accts := account.New(pool)
+	txns := transaction.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	// Only a cash account with a balance — no invested holdings.
+	wallet, err := accts.Create(ctx, fmt.Sprintf("Wallet-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	if _, err := txns.Record(ctx, wallet.ID, transaction.Income, req("5000"), dateOnlyUTC(time.Now()), "salary", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+
+	a, err := svc.Allocation(ctx, "security")
+	if err != nil {
+		t.Fatalf("allocation (empty): %v", err)
+	}
+	if len(a.Groups) != 0 {
+		t.Errorf("groups = %+v, want none", a.Groups)
+	}
+	if got := a.Total.String(); got != "0.0000 BRL" {
+		t.Errorf("Total = %s, want 0.0000 BRL", got)
+	}
+}
+
 // assertRealized asserts the cumulative realized G/L for a currency.
 func assertRealized(t *testing.T, p Portfolio, cur money.Currency, want string) {
 	t.Helper()

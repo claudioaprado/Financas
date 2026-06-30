@@ -131,13 +131,55 @@ type ChartView struct {
 	Empty      string
 }
 
-// DashboardView is the read model for the dashboard (Story 5.2 + 5.3). Cards is
-// the KPI row (Net Worth, Portfolio Value, Total Gain/Loss, Cash); Chart is the
-// value-over-time trend. MissingCodes / UnpricedSymbols carry the partial-total
-// notices (same as /investments). When ErrMsg is set only the error banner renders.
+// AllocSliceView is one allocation donut slice (Story 5.4): the precomputed
+// stroke-dasharray geometry, the colour-token classes (Stroke for the arc, Swatch
+// for the legend chip), and the legend text. All geometry is computed by the
+// handler (presentation, AD-1).
+type AllocSliceView struct {
+	DashArray  string // "arc gap" stroke-dasharray
+	DashOffset string // stroke-dashoffset (negative, cumulative)
+	Stroke     string // arc colour utility, e.g. "stroke-alloc-1"
+	Swatch     string // legend chip colour utility, e.g. "bg-alloc-1"
+	Key        string // group label (security symbol or account name)
+	Percent    int    // reconciled integer percent (slices sum to 100)
+	Value      string // Display-Currency value, e.g. "800.0000 BRL"
+}
+
+// AllocBy is one breakdown-dimension toggle option — a server-reload link
+// (?by=key, range-preserving) with Active marking the current dimension (5.4).
+type AllocBy struct {
+	Key    string
+	Label  string
+	Href   string
+	Active bool
+}
+
+// AllocationView is the dashboard's invested-value allocation card (Story 5.4):
+// the precomputed donut slices + legend, the Display currency, the Security/
+// Account toggle, and a partial-total note. HasData is false when there are no
+// priced holdings — Empty then holds the empty/error copy. Geometry is computed
+// by the handler (AD-1); the templ only emits the <svg>.
+type AllocationView struct {
+	HasData      bool
+	Slices       []AllocSliceView
+	Total        string
+	Display      string
+	By           string
+	Bys          []AllocBy
+	Partial      bool
+	MissingCodes string
+	Empty        string
+}
+
+// DashboardView is the read model for the dashboard (Story 5.2 + 5.3 + 5.4).
+// Cards is the KPI row (Net Worth, Portfolio Value, Total Gain/Loss, Cash); Chart
+// is the value-over-time trend; Allocation is the invested-value breakdown.
+// MissingCodes / UnpricedSymbols carry the partial-total notices (same as
+// /investments). When ErrMsg is set only the error banner renders.
 type DashboardView struct {
 	Cards           []KPICardView
 	Chart           ChartView
+	Allocation      AllocationView
 	MissingCodes    string
 	UnpricedSymbols string
 	ErrMsg          string

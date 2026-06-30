@@ -477,6 +477,92 @@ func (s *Service) ValueSeries(ctx context.Context, from time.Time) ([]SeriesPoin
 	return points, nil
 }
 
+// allocTopN caps the number of named allocation slices for legibility; the
+// smaller tail is folded into a single "Other" slice (Story 5.4, D5).
+const allocTopN = 8
+
+// AllocationGroup is one allocation slice formatted for the read model: the
+// grouping key (security symbol or account name), the reconciled integer
+// percent, and the Display-Currency value (round-once).
+type AllocationGroup struct {
+	Key     string
+	Percent int
+	Value   money.Money // Display Currency
+}
+
+// Allocation is the invested-value breakdown (Story 5.4, FR-12/UX-DR4): the
+// current portfolio's PRICED holdings grouped by Security or Account, converted
+// to the Display Currency and reconciled to exactly 100% (AD-12). Total is the
+// canonical Portfolio Value (== Portfolio().PortfolioValue). Missing lists the
+// holding currencies excluded for lack of a rate (partial total, AD-6); By is
+// the active dimension ("security" | "account"). There is deliberately no
+// Unpriced field: held symbols with no price are surfaced by the dashboard's
+// own UnpricedSymbols notice (from Dashboard()), so the allocation card need not
+// repeat them.
+type Allocation struct {
+	Groups  []AllocationGroup
+	Total   money.Money
+	Display money.Currency
+	By      string
+	Missing []money.Currency
+}
+
+// AllocBy normalizes the breakdown-dimension query value to a supported key,
+// defaulting to "security".
+func AllocBy(by string) string {
+	if by == "account" {
+		return "account"
+	}
+	return "security"
+}
+
+// Allocation derives the invested-value breakdown as of now for the given
+// dimension ("security" default, or "account"). It reuses the portfolio
+// valuation (priced holdings, native market value) and the SAME native→Display
+// rates Net Worth used (effective today), then delegates the grouping +
+// 100%-reconciliation to the canonical domain.Allocate (AD-10). Because the rates
+// and the convert-then-sum/round-once policy match Net Worth's, Total equals
+// Portfolio().PortfolioValue (D4). ErrOversold propagates via Portfolio.
+func (s *Service) Allocation(ctx context.Context, by string) (Allocation, error) {
+	by = AllocBy(by)
+	p, err := s.Portfolio(ctx)
+	if err != nil {
+		return Allocation{}, err // ErrOversold and read failures bubble up
+	}
+
+	items := make([]domain.AllocItem, 0, len(p.Holdings))
+	natives := make([]money.Money, 0, len(p.Holdings))
+	for _, h := range p.Holdings {
+		if !h.HasPrice {
+			continue // unpriced holdings are not invested value (consistent with PortfolioValue)
+		}
+		key := h.Symbol
+		if by == "account" {
+			key = h.AccountName
+		}
+		items = append(items, domain.AllocItem{Key: key, Value: h.Valuation})
+		natives = append(natives, h.Valuation)
+	}
+
+	// The same effective-today rates Net Worth used → Total reconciles to
+	// PortfolioValue. A second buildRates pass is a negligible owner-scale,
+	// read-only cost (mirrors Dashboard/ValueSeries re-calling portfolioAsOf).
+	rates := s.buildRates(ctx, store.New(s.pool), p.Display, dateOnlyUTC(time.Now()), natives)
+	alloc := domain.Allocate(p.Display, items, rates, allocTopN)
+
+	groups := make([]AllocationGroup, len(alloc.Slices))
+	for i, sl := range alloc.Slices {
+		groups[i] = AllocationGroup{Key: sl.Key, Percent: sl.Percent, Value: sl.Value}
+	}
+	return Allocation{
+		Groups:  groups,
+		Total:   alloc.Total,
+		Display: p.Display,
+		By:      by,
+		Missing: alloc.Missing, // holdings-specific partial set (the allocation's own exclusions)
+	}, nil
+}
+
 // dateOnlyUTC normalizes a timestamp to UTC midnight so price/rate effective
 // dates (stored as DATE → UTC midnight) and "today" compare by calendar date.
 func dateOnlyUTC(t time.Time) time.Time {

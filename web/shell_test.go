@@ -30,6 +30,48 @@ func TestDashboardPageRendersShell(t *testing.T) {
 	}
 }
 
+func TestAllocationCardRendersDonutAndLegend(t *testing.T) {
+	view := AllocationView{
+		HasData: true,
+		Total:   "5000.0000 BRL",
+		Display: "BRL",
+		By:      "security",
+		Bys: []AllocBy{
+			{Key: "security", Label: "Security", Href: "/?range=1y&by=security", Active: true},
+			{Key: "account", Label: "Account", Href: "/?range=1y&by=account"},
+		},
+		Partial:      true,
+		MissingCodes: "USD",
+		Slices: []AllocSliceView{
+			{DashArray: "351.858 87.965", DashOffset: "-0.000", Stroke: "stroke-alloc-1", Swatch: "bg-alloc-1", Key: "AAPL", Percent: 80, Value: "4000.0000 BRL"},
+			{DashArray: "87.965 351.858", DashOffset: "-351.858", Stroke: "stroke-alloc-2", Swatch: "bg-alloc-2", Key: "PETR4", Percent: 20, Value: "1000.0000 BRL"},
+		},
+	}
+	html := renderToString(t, allocationCard(view))
+	for _, want := range []string{
+		"Allocation", "(", "BRL", "Portfolio allocation", "<svg",
+		"stroke-dasharray", "351.858 87.965", "stroke-alloc-1", "bg-alloc-1",
+		"AAPL", "80%", "4000.0000 BRL", "PETR4", "20%", "1000.0000 BRL",
+		"Total", "5000.0000 BRL",
+		"Security", "Account", `aria-current="true"`,
+		"Allocation excludes", "USD", "/exchange-rates",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("allocation card missing %q", want)
+		}
+	}
+}
+
+func TestAllocationCardEmptyState(t *testing.T) {
+	html := renderToString(t, allocationCard(AllocationView{By: "security", Empty: "No invested holdings to allocate yet."}))
+	if !strings.Contains(html, "No invested holdings to allocate yet.") {
+		t.Errorf("empty allocation should render the empty copy")
+	}
+	if strings.Contains(html, "stroke-dasharray") {
+		t.Errorf("empty allocation should not render donut arcs")
+	}
+}
+
 func TestDashboardPageRendersKPICards(t *testing.T) {
 	view := DashboardView{
 		Cards: []KPICardView{

@@ -126,6 +126,7 @@ type Valuation interface {
 	Portfolio(ctx context.Context) (valuation.Portfolio, error)
 	Dashboard(ctx context.Context) (valuation.Dashboard, error)
 	ValueSeries(ctx context.Context, from time.Time) ([]valuation.SeriesPoint, error)
+	Allocation(ctx context.Context, by string) (valuation.Allocation, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -1188,13 +1189,25 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 
 		// Value-over-time trend chart (Story 5.3). A series failure degrades to an
 		// empty chart card (the KPIs still render) — with a distinct "couldn't load"
-		// message so an error is never mistaken for "no history yet".
+		// message so an error is never mistaken for "no history yet". The active
+		// allocation dimension (by) is threaded into the range links so switching
+		// the range preserves the chosen breakdown (Story 5.4).
 		rng := chartRange(req.URL.Query().Get("range"))
+		by := valuation.AllocBy(req.URL.Query().Get("by"))
 		points, sErr := deps.Valuation.ValueSeries(req.Context(), chartFrom(rng))
-		view.Chart = buildChart(points, rng)
+		view.Chart = buildChart(points, rng, by)
 		if sErr != nil {
-			view.Chart = buildChart(nil, rng)
+			view.Chart = buildChart(nil, rng, by)
 			view.Chart.Empty = "Couldn't load your trend chart right now. Please try again."
+		}
+
+		// Allocation breakdown (Story 5.4). Same graceful degradation: an error
+		// shows a distinct "couldn't load" message, never the "no holdings" empty.
+		alloc, aErr := deps.Valuation.Allocation(req.Context(), by)
+		view.Allocation = buildAllocation(alloc, rng)
+		if aErr != nil {
+			view.Allocation = buildAllocation(valuation.Allocation{By: by}, rng)
+			view.Allocation.Empty = "Couldn't load your allocation right now. Please try again."
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1242,10 +1255,10 @@ const (
 // maps each point to integer viewBox coordinates (value→y via decimal ratio, no
 // float in the core) and emits the line polyline + filled area path, axis labels,
 // the range toggle, and the partial note. Fewer than two points → the empty state.
-func buildChart(points []valuation.SeriesPoint, active string) web.ChartView {
+func buildChart(points []valuation.SeriesPoint, active, by string) web.ChartView {
 	ranges := []web.ChartRange{{Key: "1m", Label: "1M"}, {Key: "3m", Label: "3M"}, {Key: "1y", Label: "1Y"}, {Key: "all", Label: "All"}}
 	for i := range ranges {
-		ranges[i].Href = "/?range=" + ranges[i].Key
+		ranges[i].Href = "/?range=" + ranges[i].Key + "&by=" + by // preserve the allocation dimension (5.4)
 		ranges[i].Active = ranges[i].Key == active
 	}
 	cv := web.ChartView{Range: active, Ranges: ranges}
@@ -1308,6 +1321,77 @@ func buildChart(points []valuation.SeriesPoint, active string) web.ChartView {
 	cv.StartLabel = cps[0].Date
 	cv.EndLabel = cps[n-1].Date
 	return cv
+}
+
+// Allocation donut geometry (Story 5.4, D2): a ring of radius allocR drawn with
+// per-slice stroke-dasharray on overlaid circles — no trig, π is the only
+// constant. This is presentation (AD-1) and lives in the http layer, outside the
+// nofloat scope; the financial figures (percents, values) arrive pre-computed.
+const (
+	allocCenter = 100 // viewBox is "0 0 200 200"; centre at (100,100)
+	allocR      = 70  // ring radius
+	allocStroke = 30  // ring thickness
+)
+
+// allocPi is π to enough digits for sub-pixel arc lengths (http-layer geometry,
+// not the financial core — NFR-5 is unaffected).
+var allocPi = decimal.RequireFromString("3.14159265358979")
+
+// allocPalette is the categorical slice colour set (Story 5.4) — calm, distinct
+// hues defined as --color-alloc-N theme tokens and safelisted in input.css. It is
+// NOT the gain/loss palette (reserved). Cycled by slice index.
+var allocPalette = []string{"alloc-1", "alloc-2", "alloc-3", "alloc-4", "alloc-5", "alloc-6", "alloc-7", "alloc-8"}
+
+// buildAllocation turns the invested-value breakdown into ready-to-render donut
+// geometry + a legend (presentation only — AD-1; percents/values are computed by
+// domain.Allocate). The ?by= toggle links preserve the active chart range. No
+// groups → the empty state. The arcs use the reconciled integer percents (which
+// sum to 100), so the ring is whole.
+func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
+	bys := []web.AllocBy{{Key: "security", Label: "Security"}, {Key: "account", Label: "Account"}}
+	active := valuation.AllocBy(a.By)
+	for i := range bys {
+		bys[i].Href = "/?range=" + rng + "&by=" + bys[i].Key
+		bys[i].Active = bys[i].Key == active
+	}
+	av := web.AllocationView{By: active, Bys: bys, Display: string(a.Display)}
+	if len(a.Missing) > 0 {
+		codes := make([]string, len(a.Missing))
+		for i, c := range a.Missing {
+			codes[i] = string(c)
+		}
+		av.Partial = true
+		av.MissingCodes = strings.Join(codes, ", ")
+	}
+	if len(a.Groups) == 0 {
+		av.Empty = "No invested holdings to allocate yet — add securities, transactions and prices and your mix will appear here."
+		return av
+	}
+
+	av.HasData = true
+	av.Total = a.Total.String()
+	circumference := allocPi.Mul(decimal.NewFromInt(2 * allocR)) // 2πr
+	hundred := decimal.NewFromInt(100)
+	cum := 0
+	slices := make([]web.AllocSliceView, len(a.Groups))
+	for i, g := range a.Groups {
+		arc := decimal.NewFromInt(int64(g.Percent)).Mul(circumference).Div(hundred)
+		gap := circumference.Sub(arc)
+		offset := decimal.NewFromInt(int64(cum)).Mul(circumference).Div(hundred).Neg()
+		base := allocPalette[i%len(allocPalette)]
+		slices[i] = web.AllocSliceView{
+			DashArray:  arc.StringFixed(3) + " " + gap.StringFixed(3),
+			DashOffset: offset.StringFixed(3),
+			Stroke:     "stroke-" + base,
+			Swatch:     "bg-" + base,
+			Key:        g.Key,
+			Percent:    g.Percent,
+			Value:      g.Value.String(),
+		}
+		cum += g.Percent
+	}
+	av.Slices = slices
+	return av
 }
 
 // kpiCard maps a valuation.KPI into its pre-formatted view row: the money string

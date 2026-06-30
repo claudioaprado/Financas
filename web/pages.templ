@@ -20,6 +20,7 @@ templ DashboardPage(data ShellData, view DashboardView) {
 				}
 			</div>
 			@trendChart(view.Chart)
+			@allocationCard(view.Allocation)
 			if view.MissingCodes != "" {
 				<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
 					Totals exclude <span class="font-semibold">{ view.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
@@ -78,6 +79,77 @@ templ trendChart(c ChartView) {
 			}
 		} else {
 			<p class="mt-3 text-sm text-muted">{ c.Empty }</p>
+		}
+	}
+}
+
+// allocationCard renders the invested-value allocation breakdown (Story 5.4,
+// UX-DR4): a header with the Display currency + the Security/Account toggle, then
+// either a server-rendered SVG donut (one stroke-dasharray arc per slice, a
+// distinct calm categorical colour each — never gain/loss) beside an HTML legend
+// (colour chip + key + percent + value), or a calm empty/error state. The donut
+// arcs use the reconciled percents (which sum to exactly 100%, AD-12). Geometry
+// is precomputed by the handler (AD-1).
+templ allocationCard(a AllocationView) {
+	@Card("mt-4") {
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<h2 class="text-label text-muted">
+				Allocation
+				if a.Display != "" {
+					({ a.Display })
+				}
+			</h2>
+			<div class="flex gap-1 text-xs">
+				for _, b := range a.Bys {
+					<a
+						href={ templ.URL(b.Href) }
+						class={ "rounded px-2 py-0.5", templ.KV("bg-accent/10 text-accent font-medium", b.Active), templ.KV("text-muted hover:text-ink", !b.Active) }
+						if b.Active {
+							aria-current="true"
+						}
+					>{ b.Label }</a>
+				}
+			</div>
+		</div>
+		if a.HasData {
+			<div class="mt-3 flex flex-wrap items-center gap-6">
+				<svg viewBox="0 0 200 200" class="h-40 w-40 shrink-0" role="img" aria-label="Portfolio allocation">
+					<g transform="rotate(-90 100 100)">
+						<circle cx="100" cy="100" r="70" fill="none" stroke-width="30" class="stroke-muted/15"></circle>
+						for _, s := range a.Slices {
+							<circle
+								cx="100"
+								cy="100"
+								r="70"
+								fill="none"
+								stroke-width="30"
+								class={ s.Stroke }
+								stroke-dasharray={ s.DashArray }
+								stroke-dashoffset={ s.DashOffset }
+							><title>{ s.Key }: { itoa(s.Percent) }% ({ s.Value })</title></circle>
+						}
+					</g>
+					<text x="100" y="98" text-anchor="middle" class="fill-muted text-label">Total</text>
+					<text x="100" y="116" text-anchor="middle" font-size="13" class="fill-ink font-semibold">{ a.Total }</text>
+				</svg>
+				<ul class="min-w-0 flex-1 space-y-1 text-sm">
+					for _, s := range a.Slices {
+						<li class="flex items-center gap-2">
+							<span class={ "inline-block h-3 w-3 shrink-0 rounded-sm", s.Swatch }></span>
+							<span class="min-w-0 flex-1 truncate text-ink">{ s.Key }</span>
+							<span class="font-medium text-ink">{ itoa(s.Percent) }%</span>
+							<span class="text-muted">{ s.Value }</span>
+						</li>
+					}
+				</ul>
+			</div>
+			if a.Partial {
+				<p class="mt-2 text-xs text-muted">
+					Allocation excludes <span class="font-semibold">{ a.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+				</p>
+			}
+		} else {
+			<p class="mt-3 text-sm text-muted">{ a.Empty }</p>
 		}
 	}
 }

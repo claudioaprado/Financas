@@ -520,11 +520,13 @@ func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.p
 // stubValuation is an in-memory Valuation for handler tests. It returns a canned
 // Portfolio (or err when set).
 type stubValuation struct {
-	portfolio valuation.Portfolio
-	dashboard valuation.Dashboard
-	series    []valuation.SeriesPoint
-	seriesErr error
-	err       error
+	portfolio  valuation.Portfolio
+	dashboard  valuation.Dashboard
+	series     []valuation.SeriesPoint
+	seriesErr  error
+	allocation valuation.Allocation
+	allocErr   error
+	err        error
 }
 
 func (s *stubValuation) Portfolio(context.Context) (valuation.Portfolio, error) {
@@ -537,6 +539,29 @@ func (s *stubValuation) Dashboard(context.Context) (valuation.Dashboard, error) 
 
 func (s *stubValuation) ValueSeries(context.Context, time.Time) ([]valuation.SeriesPoint, error) {
 	return s.series, s.seriesErr
+}
+
+func (s *stubValuation) Allocation(_ context.Context, by string) (valuation.Allocation, error) {
+	a := s.allocation
+	if a.By == "" {
+		a.By = valuation.AllocBy(by)
+	}
+	return a, s.allocErr
+}
+
+// cannedAllocation is the default allocation served in handler tests: a two-slice
+// breakdown (80 / 20) with a USD currency excluded for lack of a rate (partial).
+func cannedAllocation() valuation.Allocation {
+	return valuation.Allocation{
+		By:      "security",
+		Display: money.BRL,
+		Total:   money.New(decimal.RequireFromString("5000.0000"), money.BRL),
+		Missing: []money.Currency{money.USD},
+		Groups: []valuation.AllocationGroup{
+			{Key: "AAPL", Percent: 80, Value: money.New(decimal.RequireFromString("4000.0000"), money.BRL)},
+			{Key: "PETR4", Percent: 20, Value: money.New(decimal.RequireFromString("1000.0000"), money.BRL)},
+		},
+	}
 }
 
 // cannedSeries is the default Net Worth trend served in handler tests: three
@@ -614,7 +639,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
-		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries()},
+		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -926,6 +951,99 @@ func TestDashboardChartEmptyState(t *testing.T) {
 	}
 	if strings.Contains(body, "<polyline") {
 		t.Errorf("empty chart should not render a line")
+	}
+}
+
+func TestDashboardRendersAllocation(t *testing.T) {
+	body := dashboardBody(t, testDeps(true, nil), "/")
+	// The donut SVG + arcs, the legend rows (key + percent + value), the centre
+	// total, the Security/Account toggle, and the partial note.
+	for _, want := range []string{
+		"Portfolio allocation", "<svg", "stroke-dasharray", "stroke-alloc-1", "bg-alloc-1",
+		"AAPL", "80%", "4000.0000 BRL", // legend slice 1
+		"PETR4", "20%", "1000.0000 BRL", // legend slice 2
+		"Total", "5000.0000 BRL", // centre total
+		"Security", "Account", "by=account", "by=security", // toggle links (& is HTML-escaped)
+		"Allocation excludes", "USD", // partial note
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard allocation missing %q", want)
+		}
+	}
+	// Default dimension is Security → that link is current.
+	if !strings.Contains(body, `aria-current="true">Security`) {
+		t.Errorf("default dimension Security should be marked current")
+	}
+	// The chart range links must preserve the active dimension (5.4 cross-preserve;
+	// the ampersand is HTML-escaped to &amp; in the rendered href).
+	if !strings.Contains(body, "/?range=1m&amp;by=security") {
+		t.Errorf("chart range links should carry the active by= dimension")
+	}
+}
+
+func TestDashboardAllocationByAccount(t *testing.T) {
+	deps := testDeps(true, nil)
+	a := cannedAllocation()
+	a.By = "account"
+	a.Groups = []valuation.AllocationGroup{
+		{Key: "Broker A", Percent: 100, Value: money.New(decimal.RequireFromString("5000.0000"), money.BRL)},
+	}
+	a.Missing = nil
+	deps.Valuation = &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: a}
+	body := dashboardBody(t, deps, "/?by=account")
+	if !strings.Contains(body, `aria-current="true">Account`) {
+		t.Errorf("?by=account should mark the Account link current")
+	}
+	if !strings.Contains(body, "Broker A") {
+		t.Errorf("by-account allocation should list the account name")
+	}
+	if strings.Contains(body, "Allocation excludes") {
+		t.Errorf("no missing currency → no partial note")
+	}
+}
+
+func TestDashboardAllocationEmptyState(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{
+		portfolio:  cannedPortfolio(),
+		dashboard:  cannedDashboard(),
+		series:     cannedSeries(),
+		allocation: valuation.Allocation{By: "security", Display: money.BRL, Total: money.New(decimal.Zero, money.BRL)},
+	}
+	body := dashboardBody(t, deps, "/")
+	if !strings.Contains(body, "No invested holdings to allocate yet") {
+		t.Errorf("no groups should render the allocation empty state")
+	}
+	// The donut should not render when there is no data (no arc dasharrays).
+	if strings.Contains(body, "stroke-dasharray") {
+		t.Errorf("empty allocation should not render donut arcs")
+	}
+}
+
+func TestDashboardAllocationErrorState(t *testing.T) {
+	// AC #6: an allocation load failure shows a distinct "couldn't load" message
+	// (error ≠ no-data) while the rest of the dashboard (KPIs, chart) still renders.
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{
+		portfolio: cannedPortfolio(),
+		dashboard: cannedDashboard(),
+		series:    cannedSeries(),
+		allocErr:  errors.New("boom"),
+	}
+	body := dashboardBody(t, deps, "/")
+	// The apostrophe in "Couldn't" is HTML-escaped to &#39; in the rendered text,
+	// so match the unambiguous tail of the distinct error copy.
+	if !strings.Contains(body, "load your allocation right now") {
+		t.Errorf("allocation error should render the distinct couldn't-load message")
+	}
+	if strings.Contains(body, "No invested holdings to allocate yet") {
+		t.Errorf("an error must not render the no-data empty state (error ≠ no-data)")
+	}
+	// The rest of the dashboard survives the allocation error.
+	for _, want := range []string{"Net worth", "Net worth over time"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard should still render %q despite the allocation error", want)
+		}
 	}
 }
 
