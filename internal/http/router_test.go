@@ -1,10 +1,12 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -647,14 +649,24 @@ func cannedPortfolio() valuation.Portfolio {
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
 // stubBackup is an in-memory Backup for handler tests: it returns a canned
-// Export, or err when set.
+// Export, or err when set, and records the bytes passed to Restore.
 type stubBackup struct {
-	export backup.Export
-	err    error
+	export         backup.Export
+	err            error
+	restoreSummary backup.RestoreSummary
+	restoreErr     error
+	restoredBytes  []byte
+	restoreCalled  bool
 }
 
 func (s *stubBackup) Export(context.Context) (backup.Export, error) {
 	return s.export, s.err
+}
+
+func (s *stubBackup) Restore(_ context.Context, raw []byte) (backup.RestoreSummary, error) {
+	s.restoreCalled = true
+	s.restoredBytes = raw
+	return s.restoreSummary, s.restoreErr
 }
 
 // cannedExport is a small but representative authored-data snapshot for the
@@ -2037,4 +2049,126 @@ func authedGet(t *testing.T, deps Deps, path string) string {
 		t.Fatalf("GET %s = %d, want 200", path, rec.Code)
 	}
 	return rec.Body.String()
+}
+
+// --- Story 6.2: POST /restore ---
+
+// multipartRestore builds a multipart/form-data POST body for /restore with an
+// optional file part and an optional confirm checkbox.
+func multipartRestore(t *testing.T, fileContent string, withFile, confirm bool) (*http.Request, string) {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if withFile {
+		fw, err := mw.CreateFormFile("file", "backup.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fw.Write([]byte(fileContent))
+	}
+	if confirm {
+		_ = mw.WriteField("confirm", "on")
+	}
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/restore", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req, mw.FormDataContentType()
+}
+
+func TestRestoreRequiresAuth(t *testing.T) {
+	// An unauthenticated unsafe method gets 401 (requireAuth redirects GETs but
+	// rejects non-GET rather than redirect a POST body).
+	req, _ := multipartRestore(t, "{}", true, true)
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(true, nil)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth POST /restore = %d, want 401", rec.Code)
+	}
+}
+
+func TestRestoreUploadSuccess(t *testing.T) {
+	deps := testDeps(true, nil)
+	stub := &stubBackup{export: cannedExport(), restoreSummary: backup.RestoreSummary{Accounts: 1, Transactions: 1}}
+	deps.Backup = stub
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	payload := `{"schema":"financas.export","version":1,"display_currency":"USD"}`
+	req, _ := multipartRestore(t, payload, true, true)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(req, cookie))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /restore = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/settings?restored=1" {
+		t.Errorf("redirect = %q, want /settings?restored=1", loc)
+	}
+	if !stub.restoreCalled {
+		t.Fatal("Restore was not called")
+	}
+	if string(stub.restoredBytes) != payload {
+		t.Errorf("service got %q, want the uploaded file bytes %q", stub.restoredBytes, payload)
+	}
+}
+
+func TestRestoreMissingConfirmRejected(t *testing.T) {
+	deps := testDeps(true, nil)
+	stub := &stubBackup{export: cannedExport()}
+	deps.Backup = stub
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	req, _ := multipartRestore(t, "{}", true, false) // file but no confirm
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(req, cookie))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("no-confirm POST /restore = %d, want 400", rec.Code)
+	}
+	if stub.restoreCalled {
+		t.Error("Restore must not run without confirmation")
+	}
+	if !strings.Contains(rec.Body.String(), "Tick the box") {
+		t.Error("expected a confirm-required message")
+	}
+}
+
+func TestRestoreServiceErrorRendersReason(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Backup = &stubBackup{export: cannedExport(), restoreErr: backup.ErrUnsupportedVersion}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	req, _ := multipartRestore(t, `{"schema":"financas.export","version":999}`, true, true)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(req, cookie))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("version-error POST /restore = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "incompatible version") {
+		t.Errorf("expected an incompatible-version message, body = %s", rec.Body.String())
+	}
+}
+
+func TestSettingsShowsRestoreFormAndNotice(t *testing.T) {
+	// The restore form is present on the settings page.
+	body := authedGet(t, testDeps(true, nil), "/settings")
+	for _, want := range []string{`action="/restore"`, `enctype="multipart/form-data"`, `name="confirm"`, `name="file"`, "replaces all"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings page missing restore-form bit %q", want)
+		}
+	}
+	// The ?restored=1 success notice renders.
+	notice := authedGet(t, testDeps(true, nil), "/settings?restored=1")
+	if !strings.Contains(notice, "restored from the backup") {
+		t.Error("settings page missing the restored success notice")
+	}
 }

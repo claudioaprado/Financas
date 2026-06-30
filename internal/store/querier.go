@@ -59,6 +59,30 @@ type Querier interface {
 	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
+	RestoreDeleteAccounts(ctx context.Context) error
+	RestoreDeleteCategories(ctx context.Context) error
+	RestoreDeleteExchangeRates(ctx context.Context) error
+	RestoreDeletePrices(ctx context.Context) error
+	RestoreDeleteSecurities(ctx context.Context) error
+	// Restore queries for Story 6.2 (recover from a 6.1 export). Restore is a
+	// replace-all operation inside one transaction (AD-3): delete every authored row
+	// child→parent, re-insert each row parent→child with its ORIGINAL primary key
+	// and created_at (OVERRIDING SYSTEM VALUE — the PKs are GENERATED ALWAYS AS
+	// IDENTITY), then reset each identity sequence past the restored ids. Derived
+	// figures are never written; they recompute on read (AD-2).
+	RestoreDeleteTransactions(ctx context.Context) error
+	RestoreInsertAccount(ctx context.Context, arg RestoreInsertAccountParams) error
+	RestoreInsertCategory(ctx context.Context, arg RestoreInsertCategoryParams) error
+	RestoreInsertExchangeRate(ctx context.Context, arg RestoreInsertExchangeRateParams) error
+	RestoreInsertPrice(ctx context.Context, arg RestoreInsertPriceParams) error
+	RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSecurityParams) error
+	RestoreInsertTransaction(ctx context.Context, arg RestoreInsertTransactionParams) error
+	RestoreResetAccountSeq(ctx context.Context) error
+	RestoreResetCategorySeq(ctx context.Context) error
+	RestoreResetExchangeRateSeq(ctx context.Context) error
+	RestoreResetPriceSeq(ctx context.Context) error
+	RestoreResetSecuritySeq(ctx context.Context) error
+	RestoreResetTransactionSeq(ctx context.Context) error
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (int64, error)

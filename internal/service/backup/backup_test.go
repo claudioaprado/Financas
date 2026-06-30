@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
+	"github.com/claudioaprado/financas/internal/service/valuation"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -319,3 +322,282 @@ func TestExportEmptyInstance(t *testing.T) {
 		t.Errorf("expected empty arrays, got accounts=%d transactions=%d", len(exp.Accounts), len(exp.Transactions))
 	}
 }
+
+// --- Story 6.2: Restore ---
+
+// seedSample populates a representative cross-currency instance (Display = BRL)
+// and returns the USD broker investment account id (for balance/holdings
+// assertions). It mirrors the export-fidelity fixture: cash + investment
+// accounts, a category, a security, a rate, a price, and income/expense/
+// transfer/buy/sell/dividend.
+func seedSample(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	ctx := context.Background()
+	accts := account.New(pool)
+	cats := category.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	rates := exchangerate.New(pool)
+	set := settings.New(pool)
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display: %v", err)
+	}
+	cashUSD, err := accts.Create(ctx, "CashUSD", account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("cashUSD: %v", err)
+	}
+	cashBRL, err := accts.Create(ctx, "CashBRL", account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("cashBRL: %v", err)
+	}
+	broker, err := accts.Create(ctx, "BrokerUSD", account.Investment, money.USD)
+	if err != nil {
+		t.Fatalf("broker: %v", err)
+	}
+	salary, err := cats.Create(ctx, "Salary", category.Income)
+	if err != nil {
+		t.Fatalf("category: %v", err)
+	}
+	sec, err := secs.Create(ctx, "ACME", "Acme Corp", security.Stock, money.USD)
+	if err != nil {
+		t.Fatalf("security: %v", err)
+	}
+	if _, err := rates.Add(ctx, money.USD, money.BRL, dt(t, "2026-06-01"), req("5")); err != nil {
+		t.Fatalf("rate: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, dt(t, "2026-06-02"), req("120")); err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Income, req("1000"), dt(t, "2026-06-03"), "pay", salary.ID); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Expense, req("40.25"), dt(t, "2026-06-04"), "lunch", 0); err != nil {
+		t.Fatalf("expense: %v", err)
+	}
+	if err := txns.Transfer(ctx, cashUSD.ID, cashBRL.ID, req("100"), req("500"), dt(t, "2026-06-05"), "move"); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("3"), req("100"), req("1.50"), dt(t, "2026-06-06"), "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	if _, err := txns.Dividend(ctx, broker.ID, sec.ID, req("12.00"), dt(t, "2026-06-07"), "div"); err != nil {
+		t.Fatalf("dividend: %v", err)
+	}
+	return broker.ID
+}
+
+// TestRestoreRoundTrip is the crown jewel (AC#1, AC#2): seed instance A, export
+// it, restore into a FRESH instance B, and assert B's derived Net Worth /
+// portfolio value reproduce A's exactly, with preserved primary keys and
+// created_at — all from authored data alone.
+func TestRestoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	poolA := newPool(t)
+	brokerID := seedSample(t, poolA)
+
+	srcVal, err := valuation.New(poolA).Portfolio(ctx)
+	if err != nil {
+		t.Fatalf("source portfolio: %v", err)
+	}
+	// Capture the broker account's derived balance + holdings (AC#2 names both).
+	srcBal, err := transaction.New(poolA).Balance(ctx, brokerID)
+	if err != nil {
+		t.Fatalf("source balance: %v", err)
+	}
+	srcHoldings, srcRealized, err := transaction.New(poolA).Holdings(ctx, brokerID)
+	if err != nil {
+		t.Fatalf("source holdings: %v", err)
+	}
+	srcExp, err := New(poolA).Export(ctx)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	raw, err := json.Marshal(srcExp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Fresh, migrated, empty instance B.
+	poolB := newPool(t)
+	sum, err := New(poolB).Restore(ctx, raw)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if sum.Accounts != len(srcExp.Accounts) || sum.Transactions != len(srcExp.Transactions) ||
+		sum.Securities != len(srcExp.Securities) || sum.Prices != len(srcExp.Prices) ||
+		sum.ExchangeRates != len(srcExp.ExchangeRates) || sum.Categories != len(srcExp.Categories) {
+		t.Fatalf("summary %+v does not match source counts", sum)
+	}
+
+	// B's export must be byte-identical to A's except the exported_at stamp:
+	// same PKs, created_at, and rows (preserved identity, AC#1).
+	dstExp, err := New(poolB).Export(ctx)
+	if err != nil {
+		t.Fatalf("re-export: %v", err)
+	}
+	srcExp.ExportedAt, dstExp.ExportedAt = "", ""
+	srcJSON, _ := json.Marshal(srcExp)
+	dstJSON, _ := json.Marshal(dstExp)
+	if string(srcJSON) != string(dstJSON) {
+		t.Errorf("restored export differs from source:\n src=%s\n dst=%s", srcJSON, dstJSON)
+	}
+
+	// Derived figures reproduce on read (AC#2, NFR-2/AD-2).
+	dstVal, err := valuation.New(poolB).Portfolio(ctx)
+	if err != nil {
+		t.Fatalf("dest portfolio: %v", err)
+	}
+	if srcVal.NetWorth.String() != dstVal.NetWorth.String() {
+		t.Errorf("NetWorth: src %s != dst %s", srcVal.NetWorth.String(), dstVal.NetWorth.String())
+	}
+	if srcVal.PortfolioValue.String() != dstVal.PortfolioValue.String() {
+		t.Errorf("PortfolioValue: src %s != dst %s", srcVal.PortfolioValue.String(), dstVal.PortfolioValue.String())
+	}
+
+	// Account balance + holdings re-derive identically (AC#2 names both directly).
+	dstBal, err := transaction.New(poolB).Balance(ctx, brokerID)
+	if err != nil {
+		t.Fatalf("dest balance: %v", err)
+	}
+	if srcBal.String() != dstBal.String() {
+		t.Errorf("broker balance: src %s != dst %s", srcBal.String(), dstBal.String())
+	}
+	dstHoldings, dstRealized, err := transaction.New(poolB).Holdings(ctx, brokerID)
+	if err != nil {
+		t.Fatalf("dest holdings: %v", err)
+	}
+	if srcRealized.String() != dstRealized.String() {
+		t.Errorf("broker realized gain: src %s != dst %s", srcRealized.String(), dstRealized.String())
+	}
+	if len(srcHoldings) != len(dstHoldings) {
+		t.Fatalf("holdings count: src %d != dst %d", len(srcHoldings), len(dstHoldings))
+	}
+	for i := range srcHoldings {
+		if srcHoldings[i].Symbol != dstHoldings[i].Symbol ||
+			srcHoldings[i].Quantity.String() != dstHoldings[i].Quantity.String() ||
+			srcHoldings[i].MarketValue.String() != dstHoldings[i].MarketValue.String() {
+			t.Errorf("holding[%d] differs: src %+v dst %+v", i, srcHoldings[i], dstHoldings[i])
+		}
+	}
+
+	// Identity sequence advanced past restored ids: a new account gets MAX+1.
+	maxID := int64(0)
+	for _, a := range dstExp.Accounts {
+		if a.ID > maxID {
+			maxID = a.ID
+		}
+	}
+	created, err := account.New(poolB).Create(ctx, "PostRestore", account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("post-restore create: %v", err)
+	}
+	if created.ID != maxID+1 {
+		t.Errorf("post-restore account id = %d, want %d (MAX+1)", created.ID, maxID+1)
+	}
+}
+
+// TestRestoreIdempotent (AC#4): restoring the same file twice yields the same
+// final state (replace-all).
+func TestRestoreIdempotent(t *testing.T) {
+	ctx := context.Background()
+	poolA := newPool(t)
+	seedSample(t, poolA)
+	srcExp, _ := New(poolA).Export(ctx)
+	raw, _ := json.Marshal(srcExp)
+
+	poolB := newPool(t)
+	if _, err := New(poolB).Restore(ctx, raw); err != nil {
+		t.Fatalf("restore 1: %v", err)
+	}
+	first, _ := valuation.New(poolB).Portfolio(ctx)
+	if _, err := New(poolB).Restore(ctx, raw); err != nil {
+		t.Fatalf("restore 2: %v", err)
+	}
+	second, _ := valuation.New(poolB).Portfolio(ctx)
+	if first.NetWorth.String() != second.NetWorth.String() {
+		t.Errorf("idempotency broken: %s != %s", first.NetWorth.String(), second.NetWorth.String())
+	}
+	// Row counts unchanged after the second restore.
+	exp2, _ := New(poolB).Export(ctx)
+	if len(exp2.Accounts) != len(srcExp.Accounts) || len(exp2.Transactions) != len(srcExp.Transactions) {
+		t.Errorf("second restore changed row counts")
+	}
+}
+
+// TestRestoreAtomicReject (AC#3): a malformed / wrong-schema / wrong-version /
+// dangling file is rejected with a clear typed error and leaves the instance
+// unchanged.
+func TestRestoreAtomicReject(t *testing.T) {
+	ctx := context.Background()
+	pool := newPool(t)
+	seedSample(t, pool)
+	svc := New(pool)
+
+	before, _ := svc.Export(ctx)
+	beforeVal, _ := valuation.New(pool).Portfolio(ctx)
+	assertUnchanged := func(t *testing.T, label string) {
+		t.Helper()
+		after, err := svc.Export(ctx)
+		if err != nil {
+			t.Fatalf("%s: re-export: %v", label, err)
+		}
+		if len(after.Accounts) != len(before.Accounts) || len(after.Transactions) != len(before.Transactions) {
+			t.Errorf("%s: row counts changed (instance not left unchanged)", label)
+		}
+		afterVal, _ := valuation.New(pool).Portfolio(ctx)
+		if afterVal.NetWorth.String() != beforeVal.NetWorth.String() {
+			t.Errorf("%s: NetWorth changed %s -> %s", label, beforeVal.NetWorth.String(), afterVal.NetWorth.String())
+		}
+	}
+
+	// (a) not JSON.
+	if _, err := svc.Restore(ctx, []byte("this is not json")); !errors.Is(err, ErrMalformed) {
+		t.Errorf("non-JSON: err = %v, want ErrMalformed", err)
+	}
+	assertUnchanged(t, "non-JSON")
+
+	// (b) wrong schema.
+	bad := before
+	bad.Schema = "bogus.format"
+	badRaw, _ := json.Marshal(bad)
+	if _, err := svc.Restore(ctx, badRaw); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Errorf("wrong schema: err = %v, want ErrUnsupportedSchema", err)
+	}
+	assertUnchanged(t, "wrong schema")
+
+	// (c) unsupported version.
+	ver := before
+	ver.Version = 999
+	verRaw, _ := json.Marshal(ver)
+	if _, err := svc.Restore(ctx, verRaw); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Errorf("bad version: err = %v, want ErrUnsupportedVersion", err)
+	}
+	assertUnchanged(t, "bad version")
+
+	// (d) dangling FK: a transaction referencing a non-existent account. The DB
+	// foreign key aborts the tx → rollback → instance unchanged.
+	dangling := Export{
+		Schema:          ExportSchema,
+		Version:         ExportVersion,
+		DisplayCurrency: "USD",
+		Accounts:        []AccountDTO{{ID: 1, Name: "Only", Type: "cash", Currency: "USD", CreatedAt: "2026-06-01T00:00:00Z"}},
+		Categories:      []CategoryDTO{},
+		Securities:      []SecurityDTO{},
+		ExchangeRates:   []ExchangeRateDTO{},
+		Prices:          []PriceDTO{},
+		Transactions: []TransactionDTO{{
+			ID: 1, Type: "income", ToAccountID: ptrInt64(999), // 999 does not exist
+			FromAmount: "0", ToAmount: "100", OccurredOn: "2026-06-03", Description: "bad",
+			Quantity: "0", Price: "0", Fees: "0",
+		}},
+	}
+	danglingRaw, _ := json.Marshal(dangling)
+	if _, err := svc.Restore(ctx, danglingRaw); !errors.Is(err, ErrMalformed) {
+		t.Errorf("dangling FK: err = %v, want ErrMalformed", err)
+	}
+	assertUnchanged(t, "dangling FK")
+}
+
+func ptrInt64(v int64) *int64 { return &v }

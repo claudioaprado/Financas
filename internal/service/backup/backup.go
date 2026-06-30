@@ -10,14 +10,19 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
+	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -287,4 +292,291 @@ func textPtr(v pgtype.Text) *string {
 	}
 	s := v.String
 	return &s
+}
+
+// Restore sentinel errors. The http layer maps these to a precise 400 message
+// without inspecting the file itself (AD-1).
+var (
+	// ErrMalformed marks a file that isn't valid JSON, isn't a Financas export,
+	// has an unparseable field, or fails a database constraint on insert.
+	ErrMalformed = errors.New("backup: file is not a valid Financas export")
+	// ErrUnsupportedSchema marks a JSON document whose schema tag isn't ours.
+	ErrUnsupportedSchema = errors.New("backup: unrecognized export schema")
+	// ErrUnsupportedVersion marks an export from an incompatible version.
+	ErrUnsupportedVersion = errors.New("backup: unsupported export version")
+)
+
+// RestoreSummary reports how many authored rows were restored, per table.
+type RestoreSummary struct {
+	Accounts      int
+	Categories    int
+	Securities    int
+	ExchangeRates int
+	Prices        int
+	Transactions  int
+}
+
+// Restore rebuilds the instance from a 6.1 export (FR-15). It is a replace-all
+// recovery inside ONE transaction (AD-3): it deletes every authored row and
+// re-inserts the file's rows preserving primary keys and created_at (identity
+// insert), then resets the identity sequences and the display-currency setting.
+// Only AUTHORED data is written — balances, holdings, valuation and net worth
+// recompute on read and reproduce the source instance (NFR-2/AD-2).
+//
+// It is atomic: a bad file (unparseable, wrong schema/version, or a referential
+// violation caught by the database) rolls everything back and leaves the
+// instance unchanged. All field parsing happens BEFORE the transaction begins,
+// so a malformed amount/date rejects without touching the database.
+func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return RestoreSummary{}, fmt.Errorf("%w: the file is empty", ErrMalformed)
+	}
+	var exp Export
+	if err := json.Unmarshal(raw, &exp); err != nil {
+		return RestoreSummary{}, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if exp.Schema != ExportSchema {
+		return RestoreSummary{}, fmt.Errorf("%w: %q", ErrUnsupportedSchema, exp.Schema)
+	}
+	if exp.Version != ExportVersion {
+		return RestoreSummary{}, fmt.Errorf("%w: file is version %d, this app reads version %d", ErrUnsupportedVersion, exp.Version, ExportVersion)
+	}
+	if !money.IsSupported(money.Currency(exp.DisplayCurrency)) {
+		return RestoreSummary{}, fmt.Errorf("%w: unsupported display currency %q", ErrMalformed, exp.DisplayCurrency)
+	}
+
+	// Build every row's params up front so a parse error rejects the whole file
+	// before any database mutation (NFR-5: decimals via decimal.NewFromString,
+	// never a float).
+	accounts := make([]store.RestoreInsertAccountParams, 0, len(exp.Accounts))
+	for _, a := range exp.Accounts {
+		ca, err := toTimestamp(a.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		accounts = append(accounts, store.RestoreInsertAccountParams{
+			ID: a.ID, Name: a.Name, Type: a.Type, Currency: a.Currency, Archived: a.Archived, CreatedAt: ca,
+		})
+	}
+	categories := make([]store.RestoreInsertCategoryParams, 0, len(exp.Categories))
+	for _, c := range exp.Categories {
+		ca, err := toTimestamp(c.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		categories = append(categories, store.RestoreInsertCategoryParams{
+			ID: c.ID, Name: c.Name, Kind: c.Kind, CreatedAt: ca,
+		})
+	}
+	securities := make([]store.RestoreInsertSecurityParams, 0, len(exp.Securities))
+	for _, sec := range exp.Securities {
+		ca, err := toTimestamp(sec.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		securities = append(securities, store.RestoreInsertSecurityParams{
+			ID: sec.ID, Symbol: sec.Symbol, Name: sec.Name, Type: sec.Type, QuoteCurrency: sec.QuoteCurrency, CreatedAt: ca,
+		})
+	}
+	rates := make([]store.RestoreInsertExchangeRateParams, 0, len(exp.ExchangeRates))
+	for _, r := range exp.ExchangeRates {
+		rate, err := parseDecimal("exchange_rate.rate", r.Rate)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		eff, err := parseDay("exchange_rate.effective_date", r.EffectiveDate)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		ca, err := toTimestamp(r.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		rates = append(rates, store.RestoreInsertExchangeRateParams{
+			ID: r.ID, FromCurrency: r.FromCurrency, ToCurrency: r.ToCurrency, EffectiveDate: eff, Rate: rate, CreatedAt: ca,
+		})
+	}
+	prices := make([]store.RestoreInsertPriceParams, 0, len(exp.Prices))
+	for _, p := range exp.Prices {
+		pr, err := parseDecimal("price.price", p.Price)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		eff, err := parseDay("price.effective_date", p.EffectiveDate)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		ca, err := toTimestamp(p.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		prices = append(prices, store.RestoreInsertPriceParams{
+			ID: p.ID, SecurityID: p.SecurityID, EffectiveDate: eff, Price: pr, CreatedAt: ca,
+		})
+	}
+	transactions := make([]store.RestoreInsertTransactionParams, 0, len(exp.Transactions))
+	for _, t := range exp.Transactions {
+		fromAmt, err := parseDecimal("transaction.from_amount", t.FromAmount)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		toAmt, err := parseDecimal("transaction.to_amount", t.ToAmount)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		qty, err := parseDecimal("transaction.quantity", t.Quantity)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		price, err := parseDecimal("transaction.price", t.Price)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		fees, err := parseDecimal("transaction.fees", t.Fees)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		occ, err := parseDay("transaction.occurred_on", t.OccurredOn)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		ca, err := toTimestamp(t.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		transactions = append(transactions, store.RestoreInsertTransactionParams{
+			ID: t.ID, Type: t.Type,
+			FromAccountID: toInt8(t.FromAccountID), ToAccountID: toInt8(t.ToAccountID),
+			FromAmount: fromAmt, ToAmount: toAmt, OccurredOn: occ, Description: t.Description, CreatedAt: ca,
+			CategoryID: toInt8(t.CategoryID), ImportHash: toText(t.ImportHash), SecurityID: toInt8(t.SecurityID),
+			Quantity: qty, Price: price, Fees: fees,
+		})
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RestoreSummary{}, fmt.Errorf("backup: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := store.New(tx)
+
+	// Delete child→parent so foreign keys never block.
+	for _, del := range []func(context.Context) error{
+		q.RestoreDeleteTransactions, q.RestoreDeletePrices, q.RestoreDeleteExchangeRates,
+		q.RestoreDeleteSecurities, q.RestoreDeleteCategories, q.RestoreDeleteAccounts,
+	} {
+		if err := del(ctx); err != nil {
+			return RestoreSummary{}, fmt.Errorf("backup: clear data: %w", err)
+		}
+	}
+
+	// Insert parent→child, preserving ids and created_at. A foreign-key or other
+	// constraint violation here (a dangling/partial file) aborts the tx → the
+	// deferred rollback leaves the instance unchanged → reported as malformed.
+	for _, p := range accounts {
+		if err := q.RestoreInsertAccount(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring accounts: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range categories {
+		if err := q.RestoreInsertCategory(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring categories: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range securities {
+		if err := q.RestoreInsertSecurity(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring securities: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range rates {
+		if err := q.RestoreInsertExchangeRate(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring exchange rates: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range prices {
+		if err := q.RestoreInsertPrice(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring prices: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range transactions {
+		if err := q.RestoreInsertTransaction(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring transactions: %v", ErrMalformed, err)
+		}
+	}
+
+	// Advance each identity sequence past the restored ids so the next
+	// owner-created row gets a fresh, non-colliding id.
+	for _, reset := range []func(context.Context) error{
+		q.RestoreResetAccountSeq, q.RestoreResetCategorySeq, q.RestoreResetSecuritySeq,
+		q.RestoreResetExchangeRateSeq, q.RestoreResetPriceSeq, q.RestoreResetTransactionSeq,
+	} {
+		if err := reset(ctx); err != nil {
+			return RestoreSummary{}, fmt.Errorf("backup: reset sequence: %w", err)
+		}
+	}
+
+	if err := q.SetDisplayCurrency(ctx, exp.DisplayCurrency); err != nil {
+		return RestoreSummary{}, fmt.Errorf("backup: restore display currency: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return RestoreSummary{}, fmt.Errorf("backup: commit: %w", err)
+	}
+	return RestoreSummary{
+		Accounts:      len(accounts),
+		Categories:    len(categories),
+		Securities:    len(securities),
+		ExchangeRates: len(rates),
+		Prices:        len(prices),
+		Transactions:  len(transactions),
+	}, nil
+}
+
+// toTimestamp parses an exported RFC3339 created_at back to a Timestamptz. An
+// absent value falls back to now (created_at is authored history, not a
+// financial figure, and the column is NOT NULL); a present-but-unparseable
+// value is a malformed file.
+func toTimestamp(s string) (pgtype.Timestamptz, error) {
+	if s == "" {
+		return pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return pgtype.Timestamptz{}, fmt.Errorf("%w: bad created_at %q: %v", ErrMalformed, s, err)
+	}
+	return pgtype.Timestamptz{Time: t, Valid: true}, nil
+}
+
+// parseDecimal parses an exported decimal string exactly (never a float, NFR-5).
+func parseDecimal(field, s string) (decimal.Decimal, error) {
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("%w: bad decimal in %s: %v", ErrMalformed, field, err)
+	}
+	return d, nil
+}
+
+// parseDay parses an exported YYYY-MM-DD calendar date.
+func parseDay(field, s string) (time.Time, error) {
+	t, err := time.Parse(dateLayout, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: bad date in %s: %v", ErrMalformed, field, err)
+	}
+	return t, nil
+}
+
+// toInt8 maps a nullable *int64 DTO field to pgtype.Int8 (the inverse of intPtr).
+func toInt8(p *int64) pgtype.Int8 {
+	if p == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: *p, Valid: true}
+}
+
+// toText maps a nullable *string DTO field to pgtype.Text (the inverse of textPtr).
+func toText(p *string) pgtype.Text {
+	if p == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *p, Valid: true}
 }

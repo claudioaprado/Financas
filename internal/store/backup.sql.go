@@ -7,6 +7,10 @@ package store
 
 import (
 	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
 )
 
 const exportAccounts = `-- name: ExportAccounts :many
@@ -208,4 +212,307 @@ func (q *Queries) ExportTransactions(ctx context.Context) ([]Transaction, error)
 		return nil, err
 	}
 	return items, nil
+}
+
+const restoreDeleteAccounts = `-- name: RestoreDeleteAccounts :exec
+DELETE FROM account
+`
+
+func (q *Queries) RestoreDeleteAccounts(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteAccounts)
+	return err
+}
+
+const restoreDeleteCategories = `-- name: RestoreDeleteCategories :exec
+DELETE FROM category
+`
+
+func (q *Queries) RestoreDeleteCategories(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteCategories)
+	return err
+}
+
+const restoreDeleteExchangeRates = `-- name: RestoreDeleteExchangeRates :exec
+DELETE FROM exchange_rate
+`
+
+func (q *Queries) RestoreDeleteExchangeRates(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteExchangeRates)
+	return err
+}
+
+const restoreDeletePrices = `-- name: RestoreDeletePrices :exec
+DELETE FROM price
+`
+
+func (q *Queries) RestoreDeletePrices(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeletePrices)
+	return err
+}
+
+const restoreDeleteSecurities = `-- name: RestoreDeleteSecurities :exec
+DELETE FROM security
+`
+
+func (q *Queries) RestoreDeleteSecurities(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteSecurities)
+	return err
+}
+
+const restoreDeleteTransactions = `-- name: RestoreDeleteTransactions :exec
+
+DELETE FROM transaction
+`
+
+// Restore queries for Story 6.2 (recover from a 6.1 export). Restore is a
+// replace-all operation inside one transaction (AD-3): delete every authored row
+// child→parent, re-insert each row parent→child with its ORIGINAL primary key
+// and created_at (OVERRIDING SYSTEM VALUE — the PKs are GENERATED ALWAYS AS
+// IDENTITY), then reset each identity sequence past the restored ids. Derived
+// figures are never written; they recompute on read (AD-2).
+func (q *Queries) RestoreDeleteTransactions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteTransactions)
+	return err
+}
+
+const restoreInsertAccount = `-- name: RestoreInsertAccount :exec
+INSERT INTO account (id, name, type, currency, archived, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type RestoreInsertAccountParams struct {
+	ID        int64
+	Name      string
+	Type      string
+	Currency  string
+	Archived  bool
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertAccount(ctx context.Context, arg RestoreInsertAccountParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertAccount,
+		arg.ID,
+		arg.Name,
+		arg.Type,
+		arg.Currency,
+		arg.Archived,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertCategory = `-- name: RestoreInsertCategory :exec
+INSERT INTO category (id, name, kind, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4)
+`
+
+type RestoreInsertCategoryParams struct {
+	ID        int64
+	Name      string
+	Kind      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertCategory(ctx context.Context, arg RestoreInsertCategoryParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertCategory,
+		arg.ID,
+		arg.Name,
+		arg.Kind,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertExchangeRate = `-- name: RestoreInsertExchangeRate :exec
+INSERT INTO exchange_rate (id, from_currency, to_currency, effective_date, rate, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type RestoreInsertExchangeRateParams struct {
+	ID            int64
+	FromCurrency  string
+	ToCurrency    string
+	EffectiveDate time.Time
+	Rate          decimal.Decimal
+	CreatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertExchangeRate(ctx context.Context, arg RestoreInsertExchangeRateParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertExchangeRate,
+		arg.ID,
+		arg.FromCurrency,
+		arg.ToCurrency,
+		arg.EffectiveDate,
+		arg.Rate,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertPrice = `-- name: RestoreInsertPrice :exec
+INSERT INTO price (id, security_id, effective_date, price, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type RestoreInsertPriceParams struct {
+	ID            int64
+	SecurityID    int64
+	EffectiveDate time.Time
+	Price         decimal.Decimal
+	CreatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertPrice(ctx context.Context, arg RestoreInsertPriceParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertPrice,
+		arg.ID,
+		arg.SecurityID,
+		arg.EffectiveDate,
+		arg.Price,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertSecurity = `-- name: RestoreInsertSecurity :exec
+INSERT INTO security (id, symbol, name, type, quote_currency, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type RestoreInsertSecurityParams struct {
+	ID            int64
+	Symbol        string
+	Name          string
+	Type          string
+	QuoteCurrency string
+	CreatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSecurityParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertSecurity,
+		arg.ID,
+		arg.Symbol,
+		arg.Name,
+		arg.Type,
+		arg.QuoteCurrency,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertTransaction = `-- name: RestoreInsertTransaction :exec
+INSERT INTO transaction (id, type, from_account_id, to_account_id, from_amount, to_amount,
+                         occurred_on, description, created_at, category_id, import_hash,
+                         security_id, quantity, price, fees)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+`
+
+type RestoreInsertTransactionParams struct {
+	ID            int64
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	FromAmount    decimal.Decimal
+	ToAmount      decimal.Decimal
+	OccurredOn    time.Time
+	Description   string
+	CreatedAt     pgtype.Timestamptz
+	CategoryID    pgtype.Int8
+	ImportHash    pgtype.Text
+	SecurityID    pgtype.Int8
+	Quantity      decimal.Decimal
+	Price         decimal.Decimal
+	Fees          decimal.Decimal
+}
+
+func (q *Queries) RestoreInsertTransaction(ctx context.Context, arg RestoreInsertTransactionParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertTransaction,
+		arg.ID,
+		arg.Type,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.FromAmount,
+		arg.ToAmount,
+		arg.OccurredOn,
+		arg.Description,
+		arg.CreatedAt,
+		arg.CategoryID,
+		arg.ImportHash,
+		arg.SecurityID,
+		arg.Quantity,
+		arg.Price,
+		arg.Fees,
+	)
+	return err
+}
+
+const restoreResetAccountSeq = `-- name: RestoreResetAccountSeq :exec
+SELECT setval(pg_get_serial_sequence('account', 'id'),
+              COALESCE((SELECT MAX(id) FROM account), 1),
+              (SELECT MAX(id) FROM account) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetAccountSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetAccountSeq)
+	return err
+}
+
+const restoreResetCategorySeq = `-- name: RestoreResetCategorySeq :exec
+SELECT setval(pg_get_serial_sequence('category', 'id'),
+              COALESCE((SELECT MAX(id) FROM category), 1),
+              (SELECT MAX(id) FROM category) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetCategorySeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetCategorySeq)
+	return err
+}
+
+const restoreResetExchangeRateSeq = `-- name: RestoreResetExchangeRateSeq :exec
+SELECT setval(pg_get_serial_sequence('exchange_rate', 'id'),
+              COALESCE((SELECT MAX(id) FROM exchange_rate), 1),
+              (SELECT MAX(id) FROM exchange_rate) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetExchangeRateSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetExchangeRateSeq)
+	return err
+}
+
+const restoreResetPriceSeq = `-- name: RestoreResetPriceSeq :exec
+SELECT setval(pg_get_serial_sequence('price', 'id'),
+              COALESCE((SELECT MAX(id) FROM price), 1),
+              (SELECT MAX(id) FROM price) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetPriceSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetPriceSeq)
+	return err
+}
+
+const restoreResetSecuritySeq = `-- name: RestoreResetSecuritySeq :exec
+SELECT setval(pg_get_serial_sequence('security', 'id'),
+              COALESCE((SELECT MAX(id) FROM security), 1),
+              (SELECT MAX(id) FROM security) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetSecuritySeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetSecuritySeq)
+	return err
+}
+
+const restoreResetTransactionSeq = `-- name: RestoreResetTransactionSeq :exec
+SELECT setval(pg_get_serial_sequence('transaction', 'id'),
+              COALESCE((SELECT MAX(id) FROM transaction), 1),
+              (SELECT MAX(id) FROM transaction) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetTransactionSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetTransactionSeq)
+	return err
 }

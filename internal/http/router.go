@@ -137,6 +137,7 @@ type Valuation interface {
 // serializes and streams the result (AD-1).
 type Backup interface {
 	Export(ctx context.Context) (backup.Export, error)
+	Restore(ctx context.Context, raw []byte) (backup.RestoreSummary, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -228,6 +229,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
 		pr.Get("/export", exportData(deps))
+		pr.Post("/restore", restoreData(deps))
 		pr.Get("/exchange-rates", exchangeRatesForm(deps))
 		pr.Post("/exchange-rates", exchangeRatesSubmit(deps))
 		pr.Get("/prices", pricesForm(deps))
@@ -1613,17 +1615,90 @@ func exportData(deps Deps) http.HandlerFunc {
 	}
 }
 
+// restoreMaxBytes caps the uploaded export size accepted by /restore (owner-scale
+// data; a generous ceiling that still bounds memory).
+const restoreMaxBytes = 32 << 20 // 32 MiB
+
+// restoreData replaces the instance's authored data from an uploaded 6.1 export
+// (Story 6.2). The action is destructive, so it requires an explicit confirm
+// checkbox; the restore itself is atomic (one transaction) — a bad file is
+// rejected with a specific reason and leaves the instance unchanged. PRG on
+// success.
+func restoreData(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		// Bound the whole request body (defense-in-depth against a huge upload),
+		// and tell the owner specifically when their file is over the cap rather
+		// than letting a truncated read look like a corrupt backup.
+		req.Body = http.MaxBytesReader(w, req.Body, restoreMaxBytes)
+		if err := req.ParseMultipartForm(restoreMaxBytes); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				renderSettings(deps, w, req, "That backup file is too large to restore.", true, http.StatusBadRequest)
+				return
+			}
+			renderSettings(deps, w, req, "Could not read the upload. Please choose a valid backup file.", true, http.StatusBadRequest)
+			return
+		}
+		if req.PostFormValue("confirm") != "on" {
+			renderSettings(deps, w, req, "Tick the box to confirm — restoring replaces all your current data with the backup's contents.", true, http.StatusBadRequest)
+			return
+		}
+		f, _, err := req.FormFile("file")
+		if err != nil {
+			renderSettings(deps, w, req, "Choose a backup file to restore.", true, http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		raw, err := io.ReadAll(io.LimitReader(f, restoreMaxBytes))
+		if err != nil {
+			renderSettings(deps, w, req, "Could not read the backup file. Please try again.", true, http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Backup.Restore(req.Context(), raw); err != nil {
+			renderSettings(deps, w, req, restoreErrorMessage(err), true, http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/settings?restored=1", http.StatusSeeOther)
+	}
+}
+
+// restoreErrorMessage turns a restore service error into owner-facing copy. Every
+// failure path is atomic, so each message can truthfully say nothing changed.
+func restoreErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, backup.ErrUnsupportedSchema):
+		return "That file isn't a Financas backup — nothing was changed."
+	case errors.Is(err, backup.ErrUnsupportedVersion):
+		return "That backup was made by an incompatible version of Financas — nothing was changed."
+	case errors.Is(err, backup.ErrMalformed):
+		return "That backup file is invalid or incomplete — nothing was changed."
+	default:
+		return "Could not restore from that file — nothing was changed."
+	}
+}
+
 func settingsForm(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		var codes []string
-		if currs, err := deps.Settings.ListCurrencies(req.Context()); err == nil {
-			for _, c := range currs {
-				codes = append(codes, string(c))
-			}
+		notice := ""
+		if req.URL.Query().Get("restored") != "" {
+			notice = "Your data was restored from the backup."
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = web.SettingsPage(shellData(deps, req.Context(), "settings"), codes).Render(req.Context(), w)
+		renderSettings(deps, w, req, notice, false, http.StatusOK)
 	}
+}
+
+// renderSettings renders the Settings page with an optional notice (a success
+// confirmation or an error reason from a restore attempt).
+func renderSettings(deps Deps, w http.ResponseWriter, req *http.Request, notice string, isError bool, code int) {
+	var codes []string
+	if currs, err := deps.Settings.ListCurrencies(req.Context()); err == nil {
+		for _, c := range currs {
+			codes = append(codes, string(c))
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.SettingsPage(shellData(deps, req.Context(), "settings"), codes, notice, isError).Render(req.Context(), w)
 }
 
 func settingsSubmit(deps Deps) http.HandlerFunc {
