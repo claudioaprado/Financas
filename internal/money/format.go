@@ -1,6 +1,7 @@
 package money
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -35,6 +36,26 @@ func FormatDecimal(d decimal.Decimal) string {
 // precision, e.g. a percentage: FormatDecimalFixed(12.3, 1) -> "12,3".
 func FormatDecimalFixed(d decimal.Decimal, places int32) string {
 	return formatBR(d.StringFixedBank(places))
+}
+
+// ParseDecimal parses an owner-typed number in the Brazilian convention — "."
+// groups thousands and "," is the decimal separator, e.g. "1.234,56" -> 1234.56,
+// "50,00" -> 50, "1234" -> 1234. It is the inverse of FormatDecimal and the
+// single canonical home for manual-entry parsing (the importer shares this
+// convention). Surrounding whitespace is trimmed; an empty or unparseable string
+// is an error. NFR-5: never goes through float.
+func ParseDecimal(s string) (decimal.Decimal, error) {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return decimal.Decimal{}, fmt.Errorf("money: empty number")
+	}
+	norm := strings.ReplaceAll(t, ".", "") // drop thousands separators
+	norm = strings.ReplaceAll(norm, ",", ".")
+	d, err := decimal.NewFromString(norm)
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("money: invalid number %q", s)
+	}
+	return d, nil
 }
 
 // formatBR converts a canonical decimal string (optional leading "-", a "."

@@ -1245,7 +1245,7 @@ func TestExchangeRatesAddAndList(t *testing.T) {
 
 	// POST a valid rate redirects, and it then appears in the list.
 	recAdd := httptest.NewRecorder()
-	add := httptest.NewRequest(http.MethodPost, "/exchange-rates", strings.NewReader("from=USD&to=BRL&effective_date=2024-01-01&rate=5.25"))
+	add := httptest.NewRequest(http.MethodPost, "/exchange-rates", strings.NewReader("from=USD&to=BRL&effective_date=2024-01-01&rate=5,25"))
 	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	router.ServeHTTP(recAdd, withCookie(add, cookie))
 	if recAdd.Code != http.StatusSeeOther {
@@ -1674,7 +1674,7 @@ func TestInvestmentAccountDetail(t *testing.T) {
 	post("/accounts/1/sell", "security_id=1&quantity=999&price=6&fees=0&date=2026-06-03", http.StatusBadRequest)
 
 	// Dividend credits cash; holding unchanged (still S1 listed).
-	post("/accounts/1/dividend", "security_id=1&amount=12.50&date=2026-06-04", http.StatusSeeOther)
+	post("/accounts/1/dividend", "security_id=1&amount=12,50&date=2026-06-04", http.StatusSeeOther)
 	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
 		t.Errorf("holding should remain after dividend")
 	}
@@ -1709,7 +1709,7 @@ func TestPricesAddAndList(t *testing.T) {
 
 	// POST a valid price redirects, and it then appears in the list.
 	recAdd := httptest.NewRecorder()
-	add := httptest.NewRequest(http.MethodPost, "/prices", strings.NewReader("security_id=1&effective_date=2024-06-01&price=16.00"))
+	add := httptest.NewRequest(http.MethodPost, "/prices", strings.NewReader("security_id=1&effective_date=2024-06-01&price=16,00"))
 	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	router.ServeHTTP(recAdd, withCookie(add, cookie))
 	if recAdd.Code != http.StatusSeeOther {

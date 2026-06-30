@@ -48,6 +48,57 @@ func TestFormatDecimal(t *testing.T) {
 	}
 }
 
+func TestParseDecimal(t *testing.T) {
+	ok := []struct{ in, want string }{
+		{"1.234,56", "1234.56"},
+		{"50,00", "50"},
+		{"1234", "1234"},
+		{"1234.56", "123456"}, // dot is thousands (BR), so "1234.56" => 123456
+		{"1.000.000,10", "1000000.1"},
+		{"  12,5  ", "12.5"}, // trimmed
+		{"0,3333", "0.3333"},
+		{"-2.500,50", "-2500.5"},
+		// Intentional dot-as-thousands convention (matches the importer): a dot is
+		// ALWAYS a grouping separator, never a decimal point. These therefore parse
+		// to the grouped value, NOT the dot-decimal a non-BR user might expect.
+		// Pinned so the behavior can't silently drift (the comma is the only decimal).
+		{"1.5", "15"},
+		{".5", "5"},
+		{"12.34", "1234"},
+		{"100.00", "10000"},
+		{"1.2.3", "123"},
+	}
+	for _, c := range ok {
+		got, err := ParseDecimal(c.in)
+		if err != nil {
+			t.Errorf("ParseDecimal(%q) error: %v", c.in, err)
+			continue
+		}
+		if got.String() != c.want {
+			t.Errorf("ParseDecimal(%q) = %s, want %s", c.in, got.String(), c.want)
+		}
+	}
+	for _, bad := range []string{"", "   ", "abc", "1,2,3", "R$ 5"} {
+		if _, err := ParseDecimal(bad); err == nil {
+			t.Errorf("ParseDecimal(%q) should error", bad)
+		}
+	}
+}
+
+// Round-trip: FormatDecimal(x) must parse back to x via ParseDecimal.
+func TestFormatParseRoundTrip(t *testing.T) {
+	for _, s := range []string{"1234.56", "1000000.1", "0.3333", "-2500.5", "42"} {
+		d := decimal.RequireFromString(s)
+		back, err := ParseDecimal(FormatDecimal(d))
+		if err != nil {
+			t.Fatalf("round-trip %s: %v", s, err)
+		}
+		if !back.Equal(d) {
+			t.Errorf("round-trip %s -> %q -> %s", s, FormatDecimal(d), back.String())
+		}
+	}
+}
+
 // String stays canonical (4dp, dot decimal) — the financial/debug representation
 // is unchanged; only Display is Brazilian.
 func TestStringRemainsCanonical(t *testing.T) {

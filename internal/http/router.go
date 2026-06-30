@@ -254,7 +254,7 @@ func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
 		from := money.Currency(req.PostFormValue("from"))
 		to := money.Currency(req.PostFormValue("to"))
 		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
-		rate, rErr := decimal.NewFromString(req.PostFormValue("rate"))
+		rate, rErr := money.ParseDecimal(req.PostFormValue("rate"))
 		if dErr != nil || rErr != nil {
 			renderExchangeRates(deps, w, req, "Informe uma data válida e uma taxa decimal.", http.StatusBadRequest)
 			return
@@ -302,7 +302,7 @@ func pricesSubmit(deps Deps) http.HandlerFunc {
 		}
 		securityID, idErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
 		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
-		price, pErr := decimal.NewFromString(req.PostFormValue("price"))
+		price, pErr := money.ParseDecimal(req.PostFormValue("price"))
 		if idErr != nil || dErr != nil || pErr != nil {
 			renderPrices(deps, w, req, "Escolha um ativo e informe uma data válida e um preço decimal.", http.StatusBadRequest)
 			return
@@ -537,7 +537,7 @@ func txTransfer(deps Deps) http.HandlerFunc {
 			return
 		}
 		toID, idErr := strconv.ParseInt(req.PostFormValue("to_account_id"), 10, 64)
-		fromAmount, faErr := decimal.NewFromString(req.PostFormValue("from_amount"))
+		fromAmount, faErr := money.ParseDecimal(req.PostFormValue("from_amount"))
 		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 		if idErr != nil || faErr != nil || dErr != nil {
 			renderAccountDetail(deps, w, req, acctID, 0, "Informe um destino, um valor válido e uma data.", http.StatusBadRequest)
@@ -547,7 +547,7 @@ func txTransfer(deps Deps) http.HandlerFunc {
 		// value must parse.
 		toAmount := decimal.Zero
 		if raw := strings.TrimSpace(req.PostFormValue("to_amount")); raw != "" {
-			parsed, err := decimal.NewFromString(raw)
+			parsed, err := money.ParseDecimal(raw)
 			if err != nil {
 				renderAccountDetail(deps, w, req, acctID, 0, "Informe um valor recebido válido.", http.StatusBadRequest)
 				return
@@ -614,7 +614,7 @@ func tradeDividend(deps Deps) http.HandlerFunc {
 			return
 		}
 		secID, sErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
-		amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
+		amount, aErr := money.ParseDecimal(req.PostFormValue("amount"))
 		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 		if sErr != nil || aErr != nil || dErr != nil {
 			renderAccountDetail(deps, w, req, acctID, 0, "Informe um ativo, um valor válido e uma data.", http.StatusBadRequest)
@@ -636,8 +636,8 @@ func parseTradeForm(req *http.Request) (securityID int64, quantity, price, fees 
 		return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
 	}
 	secID, sErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
-	qty, qErr := decimal.NewFromString(req.PostFormValue("quantity"))
-	pr, pErr := decimal.NewFromString(req.PostFormValue("price"))
+	qty, qErr := money.ParseDecimal(req.PostFormValue("quantity"))
+	pr, pErr := money.ParseDecimal(req.PostFormValue("price"))
 	dt, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 	if sErr != nil || qErr != nil || pErr != nil || dErr != nil {
 		return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
@@ -645,7 +645,7 @@ func parseTradeForm(req *http.Request) (securityID int64, quantity, price, fees 
 	feeStr := strings.TrimSpace(req.PostFormValue("fees"))
 	feeAmt := decimal.Zero
 	if feeStr != "" {
-		f, err := decimal.NewFromString(feeStr)
+		f, err := money.ParseDecimal(feeStr)
 		if err != nil {
 			return 0, decimal.Decimal{}, decimal.Decimal{}, decimal.Decimal{}, time.Time{}, false
 		}
@@ -998,7 +998,7 @@ func parseTxForm(req *http.Request) (typ transaction.TxType, amount decimal.Deci
 		return "", decimal.Decimal{}, time.Time{}, "", 0, false
 	}
 	typ = transaction.TxType(req.PostFormValue("type"))
-	amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
+	amount, aErr := money.ParseDecimal(req.PostFormValue("amount"))
 	date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 	if aErr != nil || dErr != nil {
 		return "", decimal.Decimal{}, time.Time{}, "", 0, false
@@ -1051,7 +1051,7 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 				Counterparty: t.Counterparty,
 				Category:     t.CategoryName,
 				CategoryID:   t.CategoryID,
-				Amount:       t.Amount.String(), // canonical: feeds the edit-form <input>, must round-trip through the parser
+				Amount:       money.FormatDecimal(t.Amount), // pt-BR: prefills the edit-form <input>, re-parsed by money.ParseDecimal
 				Signed:       sign + money.New(t.Amount, acct.Currency).Display(),
 				Incoming:     t.Incoming,
 				Editable:     t.Type != transaction.Transfer,

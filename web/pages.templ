@@ -601,7 +601,7 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 				</div>
 				<div>
 					<label class="block text-xs" for="amount">Valor</label>
-					<input id="amount" name="amount" inputmode="decimal" required value={ edit.Amount } class="w-28 rounded border px-2 py-1"/>
+					<input id="amount" name="amount" inputmode="decimal" placeholder="0,00" required value={ edit.Amount } class="w-28 rounded border px-2 py-1"/>
 				</div>
 				<div>
 					<label class="block text-xs" for="date">Data</label>
@@ -646,7 +646,7 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					</div>
 					<div>
 						<label class="block text-xs" for="from_amount">Valor ({ currency })</label>
-						<input id="from_amount" name="from_amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+						<input id="from_amount" name="from_amount" inputmode="decimal" placeholder="0,00" required class="w-28 rounded border px-2 py-1"/>
 					</div>
 					<div>
 						<label class="block text-xs" for="to_amount">Recebido</label>
@@ -797,7 +797,7 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 					</div>
 					<div>
 						<label class="block text-xs" for="div_amount">Valor ({ currency })</label>
-						<input id="div_amount" name="amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+						<input id="div_amount" name="amount" inputmode="decimal" placeholder="0,00" required class="w-28 rounded border px-2 py-1"/>
 					</div>
 					<div>
 						<label class="block text-xs" for="div_date">Data</label>
@@ -863,11 +863,11 @@ templ tradeForm(acctID int64, action, label string, securities []SecurityChoice)
 		</div>
 		<div>
 			<label class="block text-xs">Quantidade</label>
-			<input name="quantity" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
+			<input name="quantity" inputmode="decimal" placeholder="0" required class="w-24 rounded border px-2 py-1"/>
 		</div>
 		<div>
 			<label class="block text-xs">Preço</label>
-			<input name="price" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
+			<input name="price" inputmode="decimal" placeholder="0,00" required class="w-24 rounded border px-2 py-1"/>
 		</div>
 		<div>
 			<label class="block text-xs">Taxas</label>
@@ -1254,7 +1254,7 @@ templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, er
 				</div>
 				<div>
 					<label class="block text-xs" for="rate">Taxa</label>
-					<input id="rate" name="rate" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+					<input id="rate" name="rate" inputmode="decimal" placeholder="0,00" required class="w-28 rounded border px-2 py-1"/>
 				</div>
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar</button>
 			</form>
@@ -1314,7 +1314,7 @@ templ PricesPage(data ShellData, prices []PriceRow, securities []SecurityChoice,
 					</div>
 					<div>
 						<label class="block text-xs" for="price">Preço</label>
-						<input id="price" name="price" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
+						<input id="price" name="price" inputmode="decimal" placeholder="0,00" required class="w-28 rounded border px-2 py-1"/>
 					</div>
 					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar</button>
 				</form>

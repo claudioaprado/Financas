@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/claudioaprado/financas/internal/money"
 )
 
 // Transaction types an imported row maps to (sign → type). Stored directly as
@@ -120,18 +122,14 @@ func parseBRDate(s string) (time.Time, error) {
 }
 
 // parseBRDecimal parses a Brazilian-formatted number: '.' is the thousands
-// separator and ',' the decimal separator. A leading '-' is kept. No float is
-// used (NFR-5).
+// separator and ',' the decimal separator. A leading '-' is kept. It delegates to
+// money.ParseDecimal so file import and manual entry share one convention; the
+// row-level "invalid value" reason is preserved for the import preview. No float
+// is used (NFR-5).
 func parseBRDecimal(s string) (decimal.Decimal, error) {
-	bad := errors.New("invalid value")
-	if s == "" {
-		return decimal.Decimal{}, bad
-	}
-	norm := strings.ReplaceAll(s, ".", "") // drop thousands separators
-	norm = strings.ReplaceAll(norm, ",", ".")
-	v, err := decimal.NewFromString(norm)
+	v, err := money.ParseDecimal(s)
 	if err != nil {
-		return decimal.Decimal{}, bad
+		return decimal.Decimal{}, errors.New("invalid value")
 	}
 	return v, nil
 }
