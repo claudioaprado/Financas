@@ -20,6 +20,7 @@ import (
 	apphttp "github.com/claudioaprado/financas/internal/http"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/auth"
+	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
@@ -83,6 +84,7 @@ func main() {
 			Securities:    security.New(pool),
 			Imports:       importer.New(pool),
 			Valuation:     valuation.New(pool),
+			Backup:        backup.New(pool),
 			OwnerName:     cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

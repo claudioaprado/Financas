@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
@@ -644,6 +646,40 @@ func cannedPortfolio() valuation.Portfolio {
 
 // testDeps builds Deps with a fresh in-memory session manager (so each router
 // instance has an isolated store) and stubs for the services.
+// stubBackup is an in-memory Backup for handler tests: it returns a canned
+// Export, or err when set.
+type stubBackup struct {
+	export backup.Export
+	err    error
+}
+
+func (s *stubBackup) Export(context.Context) (backup.Export, error) {
+	return s.export, s.err
+}
+
+// cannedExport is a small but representative authored-data snapshot for the
+// /export handler tests.
+func cannedExport() backup.Export {
+	catID := int64(7)
+	toAcct := int64(1)
+	return backup.Export{
+		Schema:          backup.ExportSchema,
+		Version:         backup.ExportVersion,
+		ExportedAt:      "2026-06-30T00:00:00Z",
+		DisplayCurrency: "BRL",
+		Accounts:        []backup.AccountDTO{{ID: 1, Name: "CashUSD", Type: "cash", Currency: "USD", CreatedAt: "2026-06-01T00:00:00Z"}},
+		Categories:      []backup.CategoryDTO{{ID: 7, Name: "Salary", Kind: "income", CreatedAt: "2026-06-01T00:00:00Z"}},
+		Securities:      []backup.SecurityDTO{},
+		ExchangeRates:   []backup.ExchangeRateDTO{},
+		Prices:          []backup.PriceDTO{},
+		Transactions: []backup.TransactionDTO{{
+			ID: 1, Type: "income", ToAccountID: &toAcct, CategoryID: &catID,
+			FromAmount: "0", ToAmount: "1000", OccurredOn: "2026-06-03",
+			Description: "pay", Quantity: "0", Price: "0", Fees: "0",
+		}},
+	}
+}
+
 func testDeps(authOK bool, ready ReadyCheck) Deps {
 	return Deps{
 		Sessions:      scs.New(),
@@ -658,6 +694,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
+		Backup:        &stubBackup{export: cannedExport()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -1902,4 +1939,102 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) string {
 	}
 	t.Fatal("no session cookie set on login")
 	return ""
+}
+
+// --- Story 6.1: GET /export ---
+
+func TestExportRequiresAuth(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter(testDeps(true, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/export", nil))
+	// Unauthenticated requests to the protected group redirect to /login.
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("unauth GET /export = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/login" {
+		t.Errorf("redirect = %q, want /login", loc)
+	}
+}
+
+func TestExportDownloadsAuthoredJSON(t *testing.T) {
+	deps := testDeps(true, nil)
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/export", nil), cookie))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /export = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	cd := rec.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, "attachment; filename=") || !strings.Contains(cd, "financas-export-") || !strings.HasSuffix(cd, `.json"`) {
+		t.Errorf("Content-Disposition = %q, want attachment financas-export-...json", cd)
+	}
+
+	var got backup.Export
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not valid Export JSON: %v", err)
+	}
+	if got.Schema != backup.ExportSchema || got.Version != backup.ExportVersion {
+		t.Errorf("schema/version = %q/%d", got.Schema, got.Version)
+	}
+	if got.DisplayCurrency != "BRL" || len(got.Accounts) != 1 || got.Accounts[0].Name != "CashUSD" {
+		t.Errorf("export body missing canned authored rows: %+v", got)
+	}
+	// Derived figures must never appear in the file.
+	for _, banned := range []string{"net_worth", "networth", "holdings", "balance", "valuation", "gain_loss"} {
+		if strings.Contains(strings.ToLower(rec.Body.String()), banned) {
+			t.Errorf("export body unexpectedly contains derived key %q", banned)
+		}
+	}
+}
+
+func TestExportServiceErrorIs500(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Backup = &stubBackup{err: errors.New("boom")}
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/export", nil), cookie))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /export with service error = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "\"schema\"") {
+		t.Error("error response should not contain partial export JSON")
+	}
+}
+
+func TestSettingsPageHasExportLink(t *testing.T) {
+	body := authedGet(t, testDeps(true, nil), "/settings")
+	if !strings.Contains(body, `href="/export"`) {
+		t.Error("settings page missing /export download link")
+	}
+	if !strings.Contains(body, "Backup") {
+		t.Error("settings page missing Backup section heading")
+	}
+}
+
+// authedGet logs in and performs an authenticated GET, returning the body. It
+// does not assert a status (callers that need 200 can check), mirroring
+// dashboardBody but without the 200 requirement.
+func authedGet(t *testing.T, deps Deps, path string) string {
+	t.Helper()
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+	}
+	return rec.Body.String()
 }

@@ -7,6 +7,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
@@ -130,6 +132,13 @@ type Valuation interface {
 	Insight(ctx context.Context) (valuation.Insight, error)
 }
 
+// Backup assembles the owner's authored-data export (Story 6.1, FR-15). Defined
+// here (consumer side) and implemented by service/backup. The http layer only
+// serializes and streams the result (AD-1).
+type Backup interface {
+	Export(ctx context.Context) (backup.Export, error)
+}
+
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
 	Sessions      *scs.SessionManager
@@ -144,6 +153,7 @@ type Deps struct {
 	Securities    Securities
 	Imports       Imports
 	Valuation     Valuation
+	Backup        Backup
 	OwnerName     string // shown in the shell greeting (from config)
 }
 
@@ -217,6 +227,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
+		pr.Get("/export", exportData(deps))
 		pr.Get("/exchange-rates", exchangeRatesForm(deps))
 		pr.Post("/exchange-rates", exchangeRatesSubmit(deps))
 		pr.Get("/prices", pricesForm(deps))
@@ -1578,6 +1589,27 @@ func renderPage(deps Deps, active string, build func(web.ShellData) templ.Compon
 	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = build(shellData(deps, req.Context(), active)).Render(req.Context(), w)
+	}
+}
+
+// exportData streams the owner's authored-data backup as a JSON file download
+// (Story 6.1, FR-15). The backup service assembles a consistent snapshot (AD-2 —
+// authored rows only); this handler only sets the download headers and encodes.
+// A service error yields a graceful 500 with no partial body (the JSON is only
+// written once assembly succeeds).
+func exportData(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		exp, err := deps.Backup.Export(req.Context())
+		if err != nil {
+			http.Error(w, "Could not export your data right now. Please try again.", http.StatusInternalServerError)
+			return
+		}
+		filename := "financas-export-" + time.Now().UTC().Format("2006-01-02") + ".json"
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(exp)
 	}
 }
 

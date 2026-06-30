@@ -423,6 +423,12 @@ templ SettingsPage(data ShellData, currencies []string) {
 			<p class="mt-1 text-sm"><a href="/securities" class="text-accent hover:underline">Manage securities →</a></p>
 			<p class="mt-1 text-sm"><a href="/prices" class="text-accent hover:underline">Manage prices →</a></p>
 		</section>
+		<section class="mt-6 max-w-md rounded-card bg-white p-6 shadow-card">
+			<h2 class="text-lg font-bold">Backup &amp; restore</h2>
+			<p class="mt-1 text-sm text-muted">Download a single file with all your accounts, transactions, securities, prices and exchange rates. Keep it somewhere safe — it's your backup.</p>
+			<a href="/export" class="mt-3 inline-block rounded bg-slate-900 px-3 py-1.5 text-white">Download my data</a>
+			<p class="mt-3 text-xs text-muted">Restoring from a backup file arrives in a later update.</p>
+		</section>
 	}
 }
 

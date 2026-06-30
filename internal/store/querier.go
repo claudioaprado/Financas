@@ -24,6 +24,18 @@ type Querier interface {
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
+	// Full-row export queries for Story 6.1 (authored-data backup). Each SELECT
+	// lists exactly its table's columns and ORDERs BY id, so sqlc returns the
+	// existing model structs (store.Account/Category/Security/ExchangeRate/Price/
+	// Transaction) at full fidelity — primary key, all authored columns, and
+	// created_at — for a deterministic, byte-stable snapshot that restore (6.2)
+	// can re-insert parents-before-children.
+	ExportAccounts(ctx context.Context) ([]Account, error)
+	ExportCategories(ctx context.Context) ([]Category, error)
+	ExportExchangeRates(ctx context.Context) ([]ExchangeRate, error)
+	ExportPrices(ctx context.Context) ([]Price, error)
+	ExportSecurities(ctx context.Context) ([]Security, error)
+	ExportTransactions(ctx context.Context) ([]Transaction, error)
 	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
