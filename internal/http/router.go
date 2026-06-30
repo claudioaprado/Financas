@@ -127,6 +127,7 @@ type Valuation interface {
 	Dashboard(ctx context.Context) (valuation.Dashboard, error)
 	ValueSeries(ctx context.Context, from time.Time) ([]valuation.SeriesPoint, error)
 	Allocation(ctx context.Context, by string) (valuation.Allocation, error)
+	Insight(ctx context.Context) (valuation.Insight, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -745,21 +746,7 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 			Type:       typ,
 			CategoryID: catID,
 		})
-		rows := make([]web.RegisterRow, 0, len(regRows))
-		for _, r := range regRows {
-			rows = append(rows, web.RegisterRow{
-				ID:          r.ID,
-				Date:        r.Date.Format("2006-01-02"),
-				Type:        string(r.Type),
-				Description: r.Description,
-				Category:    r.Category,
-				Security:    r.Security,
-				Account:     r.Account,
-				Amount:      registerAmount(r),
-				Incoming:    r.Incoming,
-				IsTransfer:  r.IsTransfer,
-			})
-		}
+		rows := mapRegisterRows(regRows)
 
 		// HTMX filter change → swap just the rows.
 		if req.Header.Get("HX-Request") == "true" {
@@ -785,6 +772,28 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = web.TransactionsPage(shellData(deps, req.Context(), "transactions"), accounts, cats, acctID, string(typ), catID, rows).Render(req.Context(), w)
 	}
+}
+
+// mapRegisterRows maps service register rows to their pre-formatted view shape
+// (signed amount, formatted date) — shared by the full register (/transactions)
+// and the dashboard recent-activity widget so the two never drift.
+func mapRegisterRows(regRows []transaction.RegisterRow) []web.RegisterRow {
+	rows := make([]web.RegisterRow, 0, len(regRows))
+	for _, r := range regRows {
+		rows = append(rows, web.RegisterRow{
+			ID:          r.ID,
+			Date:        r.Date.Format("2006-01-02"),
+			Type:        string(r.Type),
+			Description: r.Description,
+			Category:    r.Category,
+			Security:    r.Security,
+			Account:     r.Account,
+			Amount:      registerAmount(r),
+			Incoming:    r.Incoming,
+			IsTransfer:  r.IsTransfer,
+		})
+	}
+	return rows
 }
 
 // registerAmount composes a register row's amount string: signed for
@@ -1210,6 +1219,22 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 			view.Allocation.Empty = "Couldn't load your allocation right now. Please try again."
 		}
 
+		// Insight call-out (Story 5.5, UX-DR6) — the month-over-month Net Worth
+		// change. A load failure simply hides it (the page still renders).
+		if ins, iErr := deps.Valuation.Insight(req.Context()); iErr == nil {
+			view.Insight = buildInsight(ins)
+		}
+
+		// Recent-activity widget (Story 5.5, UX-DR5) — the newest ledger rows,
+		// reusing the register read + row mapping; take the top recentTxLimit. A
+		// load failure leaves it empty (the widget renders its empty state).
+		if regRows, rErr := deps.Transactions.Register(req.Context(), transaction.RegisterFilter{}); rErr == nil {
+			if len(regRows) > recentTxLimit {
+				regRows = regRows[:recentTxLimit]
+			}
+			view.Recent = mapRegisterRows(regRows)
+		}
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), view).Render(req.Context(), w)
 	}
@@ -1392,6 +1417,42 @@ func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
 	}
 	av.Slices = slices
 	return av
+}
+
+// recentTxLimit caps the dashboard's recent-activity widget to the newest N
+// ledger rows (Story 5.5, UX-DR5); the full list lives at /transactions.
+const recentTxLimit = 5
+
+// buildInsight frames the month-over-month Net Worth insight into the bold accent
+// call-out (Story 5.5, UX-DR6). The percentage is the canonical domain figure
+// (valuation.Insight via domain.PercentChange); this only composes the sentence
+// and copies the direction flags (AD-1 — no math). No baseline → a calm fallback.
+func buildInsight(ins valuation.Insight) web.InsightView {
+	if !ins.HasData {
+		return web.InsightView{
+			Empty: "Add transactions and prices over the month and your net-worth trend will appear here.",
+		}
+	}
+	verb := "flat"
+	switch {
+	case ins.Up:
+		verb = "up"
+	case ins.Down:
+		verb = "down"
+	}
+	text := "Your net worth is " + verb + " this month"
+	if ins.Up || ins.Down {
+		// Format to 1 dp like the KPI delta (StringFixed) for a consistent "X.X%".
+		text = "Your net worth is " + verb + " " + ins.Pct.Abs().StringFixed(1) + "% this month"
+	}
+	return web.InsightView{
+		HasData:  true,
+		Text:     text,
+		NetWorth: ins.NetWorth.String(),
+		Up:       ins.Up,
+		Down:     ins.Down,
+		Partial:  ins.Partial,
+	}
 }
 
 // kpiCard maps a valuation.KPI into its pre-formatted view row: the money string

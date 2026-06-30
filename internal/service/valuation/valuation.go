@@ -563,6 +563,58 @@ func (s *Service) Allocation(ctx context.Context, by string) (Allocation, error)
 	}, nil
 }
 
+// Insight is the dashboard's single derived call-out (Story 5.5, UX-DR6): the
+// percentage change of Net Worth from the first of the current month to now, in
+// the Display Currency. Pct is the canonical domain.PercentChange figure (signed,
+// 1 dp). HasData is false when no comparable month-start baseline exists (a
+// non-positive baseline / currency mismatch) — the card then shows a calm
+// fallback. Partial is set when either valuation excluded a currency for lack of
+// a rate, so the figure is a partial total (AD-6/AD-12).
+type Insight struct {
+	Pct      decimal.Decimal // signed % change this month (1 dp)
+	Up       bool
+	Down     bool
+	HasData  bool
+	Partial  bool
+	NetWorth money.Money // current Net Worth (Display Currency)
+	Display  money.Currency
+}
+
+// Insight derives the month-over-month Net Worth change (Story 5.5): the
+// portfolio valued AS OF now vs AS OF the first of the current month (UTC),
+// reconciled by the canonical domain.PercentChange (AD-10) — the same %-change
+// home the KPI deltas use. It reuses the portfolioAsOf as-of seam (AD-11, no
+// snapshot table). ErrOversold propagates like Portfolio/Dashboard.
+func (s *Service) Insight(ctx context.Context) (Insight, error) {
+	now := time.Now()
+	cur, err := s.portfolioAsOf(ctx, now)
+	if err != nil {
+		return Insight{}, err
+	}
+	base, err := s.portfolioAsOf(ctx, firstOfMonthUTC(now))
+	if err != nil {
+		return Insight{}, err
+	}
+	pct, ok := domain.PercentChange(cur.NetWorth, base.NetWorth)
+	return Insight{
+		Pct:      pct,
+		Up:       ok && pct.IsPositive(),
+		Down:     ok && pct.IsNegative(),
+		HasData:  ok,
+		Partial:  len(cur.Missing) > 0 || len(base.Missing) > 0,
+		NetWorth: cur.NetWorth,
+		Display:  cur.Display,
+	}, nil
+}
+
+// firstOfMonthUTC returns the first day of t's month at UTC midnight — the
+// month-start baseline for the Insight, consistent with the as-of UTC date
+// convention used across the valuation service (the DB session is UTC, AD-8).
+func firstOfMonthUTC(t time.Time) time.Time {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
 // dateOnlyUTC normalizes a timestamp to UTC midnight so price/rate effective
 // dates (stored as DATE → UTC midnight) and "today" compare by calendar date.
 func dateOnlyUTC(t time.Time) time.Time {

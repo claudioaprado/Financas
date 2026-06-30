@@ -171,15 +171,33 @@ type AllocationView struct {
 	Empty        string
 }
 
-// DashboardView is the read model for the dashboard (Story 5.2 + 5.3 + 5.4).
-// Cards is the KPI row (Net Worth, Portfolio Value, Total Gain/Loss, Cash); Chart
-// is the value-over-time trend; Allocation is the invested-value breakdown.
-// MissingCodes / UnpricedSymbols carry the partial-total notices (same as
-// /investments). When ErrMsg is set only the error banner renders.
+// InsightView is the dashboard's bold accent call-out (Story 5.5, UX-DR6): a
+// single derived insight — the month-over-month Net Worth change — framed as a
+// sentence by the handler (the % is the canonical domain figure, AD-1/AD-10).
+// HasData is false when no comparable month-start baseline exists; Empty then
+// holds the calm fallback copy. Partial flags a partial-total figure.
+type InsightView struct {
+	HasData  bool
+	Text     string // e.g. "Your net worth is up 4.0% this month"
+	NetWorth string // current Net Worth (Display Currency), for context
+	Up       bool
+	Down     bool
+	Partial  bool
+	Empty    string
+}
+
+// DashboardView is the read model for the dashboard (Story 5.2–5.5). Cards is the
+// KPI row; Chart is the value-over-time trend; Allocation is the invested-value
+// breakdown; Insight is the bold accent call-out; Recent is the recent-activity
+// widget (the newest ledger rows, reusing RegisterRow). MissingCodes /
+// UnpricedSymbols carry the partial-total notices (same as /investments). When
+// ErrMsg is set only the error banner renders.
 type DashboardView struct {
 	Cards           []KPICardView
 	Chart           ChartView
 	Allocation      AllocationView
+	Insight         InsightView
+	Recent          []RegisterRow
 	MissingCodes    string
 	UnpricedSymbols string
 	ErrMsg          string

@@ -72,6 +72,52 @@ func TestAllocationCardEmptyState(t *testing.T) {
 	}
 }
 
+func TestInsightCalloutRendersSentenceAndDirection(t *testing.T) {
+	up := renderToString(t, insightCallout(InsightView{
+		HasData: true, Text: "Your net worth is up 4.0% this month",
+		NetWorth: "5200.0000 BRL", Up: true, Partial: true,
+	}))
+	for _, want := range []string{
+		"Your net worth is up 4.0% this month", "▲", "up",
+		"text-accent", "bg-accent", "Net worth 5200.0000 BRL", "Partial",
+	} {
+		if !strings.Contains(up, want) {
+			t.Errorf("insight call-out missing %q", want)
+		}
+	}
+	down := renderToString(t, insightCallout(InsightView{HasData: true, Text: "Your net worth is down 1.5% this month", NetWorth: "100.0000 BRL", Down: true}))
+	if !strings.Contains(down, "▼") || !strings.Contains(down, "down") {
+		t.Errorf("down insight should render ▼ + sr-only down")
+	}
+	empty := renderToString(t, insightCallout(InsightView{Empty: "Add transactions and prices over the month."}))
+	if !strings.Contains(empty, "Add transactions and prices over the month.") {
+		t.Errorf("empty insight should render the fallback copy")
+	}
+}
+
+func TestRecentTransactionsRendersRowsAndLink(t *testing.T) {
+	rows := []RegisterRow{
+		{Date: "2026-06-20", Type: "income", Description: "Salary", Account: "Wallet", Amount: "+5000.0000 BRL", Incoming: true},
+		{Date: "2026-06-19", Type: "expense", Description: "Groceries", Category: "Food", Account: "Wallet", Amount: "-120.5000 BRL"},
+		{Date: "2026-06-18", Type: "transfer", Description: "Move", Account: "A → B", Amount: "100.0000 BRL", IsTransfer: true},
+	}
+	html := renderToString(t, recentTransactions(rows))
+	for _, want := range []string{
+		"Recent activity", "View all", `href="/transactions"`,
+		"Salary", "+5000.0000 BRL", "text-gain",
+		"Groceries", "Food", "-120.5000 BRL", "text-loss",
+		"Move", // transfer row (neutral — no gain/loss class forced)
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("recent transactions missing %q", want)
+		}
+	}
+	empty := renderToString(t, recentTransactions(nil))
+	if !strings.Contains(empty, "No transactions yet") {
+		t.Errorf("empty recent transactions should render the empty copy")
+	}
+}
+
 func TestDashboardPageRendersKPICards(t *testing.T) {
 	view := DashboardView{
 		Cards: []KPICardView{

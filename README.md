@@ -334,6 +334,17 @@ For legibility the smallest slices beyond the top eight fold into a single **"Ot
 slice. A holding currency with no rate is excluded with a partial notice; with no
 priced holdings the card shows a calm empty state.
 
+Finally, the dashboard shows a **bold accent insight call-out** and a **recent-activity
+widget** (Story 5.5, UX-DR6/UX-DR5). The insight surfaces one derived headline —
+**"Your net worth is up/down X% this month"** — whose percentage is the canonical
+`domain.PercentChange` of Net Worth from the **first of the current month** to now, both
+valued via `portfolioAsOf` (derived from history, no snapshot table; AD-10/AD-11). The
+recent-activity widget lists the **five newest** ledger entries (a per-row type icon,
+description, date, signed colored amount — green incoming / red outgoing, transfers
+neutral — and a type/category badge), reusing the cross-account register read and linking
+to the full register at `/transactions`. Both degrade gracefully (a load failure hides or
+empties the widget; the page never 500s) and surface partial-total honesty.
+
 ## Money & decimal correctness
 
 All monetary and quantity values use `github.com/shopspring/decimal` — **never

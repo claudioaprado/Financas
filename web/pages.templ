@@ -21,6 +21,10 @@ templ DashboardPage(data ShellData, view DashboardView) {
 			</div>
 			@trendChart(view.Chart)
 			@allocationCard(view.Allocation)
+			if view.Insight.HasData || view.Insight.Empty != "" {
+				@insightCallout(view.Insight)
+			}
+			@recentTransactions(view.Recent)
 			if view.MissingCodes != "" {
 				<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
 					Totals exclude <span class="font-semibold">{ view.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
@@ -152,6 +156,100 @@ templ allocationCard(a AllocationView) {
 			<p class="mt-3 text-sm text-muted">{ a.Empty }</p>
 		}
 	}
+}
+
+// insightCallout renders the dashboard's single derived insight (Story 5.5,
+// UX-DR6): a bold accent-colored call-out card with the month-over-month Net
+// Worth sentence and a ▲/▼ direction cue. The card identity is the accent token
+// (not gain/loss); the arrow may tint gain/loss. No data → a calm fallback.
+templ insightCallout(i InsightView) {
+	@Card("mt-4 border border-accent/30 bg-accent/5") {
+		if i.HasData {
+			<div class="flex items-center gap-3">
+				<span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-card bg-accent/15 text-accent" aria-hidden="true">◆</span>
+				<div class="min-w-0">
+					<p class="text-base font-semibold text-ink">
+						{ i.Text }
+						if i.Up {
+							<span class="text-gain">▲<span class="sr-only">up</span></span>
+						}
+						if i.Down {
+							<span class="text-loss">▼<span class="sr-only">down</span></span>
+						}
+					</p>
+					<p class="text-sm text-muted">Net worth { i.NetWorth }</p>
+					if i.Partial {
+						<p class="mt-1 text-xs text-muted">Partial — a held currency had no exchange rate to the display currency.</p>
+					}
+				</div>
+			</div>
+		} else {
+			<p class="text-sm text-muted">{ i.Empty }</p>
+		}
+	}
+}
+
+// recentTransactions renders the recent-activity widget (Story 5.5, UX-DR5): the
+// newest ledger rows — a per-row type icon, description (+ a type/category badge),
+// date, and signed colored amount (green incoming / red outgoing, transfers
+// neutral) — with a "View all" link to the full register. Empty → a calm state.
+templ recentTransactions(rows []RegisterRow) {
+	@Card("mt-4") {
+		<div class="flex items-center justify-between">
+			<h2 class="text-label text-muted">Recent activity</h2>
+			<a href="/transactions" class="text-xs text-accent hover:underline">View all →</a>
+		</div>
+		if len(rows) == 0 {
+			<p class="mt-3 text-sm text-muted">No transactions yet — add one to get started.</p>
+		} else {
+			<ul class="mt-3 divide-y divide-black/5">
+				for _, r := range rows {
+					<li class="flex items-center gap-3 py-2">
+						@txTypeIcon(r.Type)
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-sm text-ink">
+								if r.Description != "" {
+									{ r.Description }
+								} else {
+									{ r.Account }
+								}
+								if r.Category != "" {
+									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ r.Category }</span>
+								} else {
+									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ r.Type }</span>
+								}
+							</p>
+							<p class="text-xs text-muted">{ r.Date } · { r.Account }</p>
+						</div>
+						<span class={ "shrink-0 text-sm font-medium tabular-nums", templ.KV("text-gain", r.Incoming && !r.IsTransfer), templ.KV("text-loss", !r.Incoming && !r.IsTransfer) }>{ r.Amount }</span>
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+// txTypeIcon renders a small accent chip with a per-type glyph for a recent-tx
+// row (Story 5.5, UX-DR5), mirroring kpiIcon's chip style.
+templ txTypeIcon(typ string) {
+	<span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-card bg-accent/10 text-accent" aria-hidden="true">
+		switch typ {
+			case "income":
+				{ "↘" }
+			case "expense":
+				{ "↗" }
+			case "transfer":
+				{ "⇄" }
+			case "buy":
+				{ "+" }
+			case "sell":
+				{ "−" }
+			case "dividend":
+				{ "✦" }
+			default:
+				{ "•" }
+		}
+	</span>
 }
 
 // kpiCard renders one summary card: an icon chip + muted label, the large number

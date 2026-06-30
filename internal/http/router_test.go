@@ -526,6 +526,8 @@ type stubValuation struct {
 	seriesErr  error
 	allocation valuation.Allocation
 	allocErr   error
+	insight    valuation.Insight
+	insightErr error
 	err        error
 }
 
@@ -547,6 +549,22 @@ func (s *stubValuation) Allocation(_ context.Context, by string) (valuation.Allo
 		a.By = valuation.AllocBy(by)
 	}
 	return a, s.allocErr
+}
+
+func (s *stubValuation) Insight(context.Context) (valuation.Insight, error) {
+	return s.insight, s.insightErr
+}
+
+// cannedInsight is the default dashboard insight served in handler tests: net
+// worth up 4.0% this month.
+func cannedInsight() valuation.Insight {
+	return valuation.Insight{
+		Pct:      decimal.RequireFromString("4.0"),
+		Up:       true,
+		HasData:  true,
+		NetWorth: money.New(decimal.RequireFromString("5200.0000"), money.BRL),
+		Display:  money.BRL,
+	}
 }
 
 // cannedAllocation is the default allocation served in handler tests: a two-slice
@@ -639,7 +657,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
-		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation()},
+		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -1044,6 +1062,71 @@ func TestDashboardAllocationErrorState(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard should still render %q despite the allocation error", want)
 		}
+	}
+}
+
+func TestDashboardRendersInsight(t *testing.T) {
+	body := dashboardBody(t, testDeps(true, nil), "/")
+	for _, want := range []string{
+		"Your net worth is up 4.0% this month", // the framed sentence
+		"▲", "up",                              // direction cue + sr-only label
+		"text-accent", "bg-accent", // bold accent call-out identity
+		"Net worth 5200.0000 BRL", // context line
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard insight missing %q", want)
+		}
+	}
+}
+
+func TestDashboardInsightEmptyState(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{
+		portfolio:  cannedPortfolio(),
+		dashboard:  cannedDashboard(),
+		series:     cannedSeries(),
+		allocation: cannedAllocation(),
+		insight:    valuation.Insight{HasData: false}, // no month-start baseline
+	}
+	body := dashboardBody(t, deps, "/")
+	if !strings.Contains(body, "your net-worth trend will appear here") {
+		t.Errorf("no-baseline insight should render the calm fallback")
+	}
+	// An insight load error must also not crash the page (KPIs still render).
+	deps.Valuation = &stubValuation{
+		portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(),
+		allocation: cannedAllocation(), insightErr: errors.New("boom"),
+	}
+	body = dashboardBody(t, deps, "/")
+	if !strings.Contains(body, "Net worth") {
+		t.Errorf("dashboard should still render despite an insight error")
+	}
+}
+
+func TestDashboardRecentActivity(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Transactions = &stubTransactions{rows: []transaction.Transaction{
+		{ID: 1, Date: time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC), Type: transaction.Income, Description: "Salary", AccountID: 1, Amount: decimal.RequireFromString("5000.0000"), Incoming: true},
+		{ID: 2, Date: time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC), Type: transaction.Expense, Description: "Groceries", AccountID: 1, Amount: decimal.RequireFromString("120.5000"), CategoryName: "Food"},
+	}}
+	body := dashboardBody(t, deps, "/")
+	for _, want := range []string{
+		"Recent activity", "View all", `href="/transactions"`,
+		"Salary", "Groceries", "Food", // descriptions + category badge
+		"+5000.0000 USD", "-120.5000 USD", // signed amounts (stub Register uses USD)
+		"text-gain", "text-loss", // income green / expense red
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("recent-activity widget missing %q", want)
+		}
+	}
+}
+
+func TestDashboardRecentActivityEmpty(t *testing.T) {
+	// testDeps uses an empty stubTransactions → the widget shows its empty state.
+	body := dashboardBody(t, testDeps(true, nil), "/")
+	if !strings.Contains(body, "No transactions yet") {
+		t.Errorf("empty ledger should render the recent-activity empty state")
 	}
 }
 

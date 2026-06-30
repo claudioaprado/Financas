@@ -834,6 +834,167 @@ func TestAllocationEmpty(t *testing.T) {
 	}
 }
 
+// TestInsight: Net Worth at month-start = 5000, now = 5200 (a held price rose
+// after the 1st) → the insight is up 4.0% this month.
+func TestInsight(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	now := time.Now()
+	today := dateOnlyUTC(now)
+	monthStart := firstOfMonthUTC(now)
+	if today.Equal(monthStart) {
+		t.Skip("month-start == today (run on the 1st): no in-month price movement to assert")
+	}
+	beforeMonth := monthStart.AddDate(0, 0, -3)
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	// Cash 5000 (income before the month), and a holding bought before the month.
+	wallet, err := accts.Create(ctx, fmt.Sprintf("Wallet-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	if _, err := txns.Record(ctx, wallet.ID, transaction.Income, req("5000"), beforeMonth, "salary", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+	broker, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("SEC%d", run), "Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("10"), req("100"), req("0"), beforeMonth, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	// Price 100 effective at month-start, 120 effective today.
+	if _, err := prices.Add(ctx, sec.ID, monthStart, req("100")); err != nil {
+		t.Fatalf("price month-start: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, today, req("120")); err != nil {
+		t.Fatalf("price today: %v", err)
+	}
+
+	// month-start NW: cash (5000 − 1000 invested) + 10×100 = 5000.
+	// now NW:         cash (5000 − 1000)           + 10×120 = 5200. → +4.0%.
+	ins, err := svc.Insight(ctx)
+	if err != nil {
+		t.Fatalf("Insight: %v", err)
+	}
+	if !ins.HasData || !ins.Up || ins.Down {
+		t.Errorf("Insight = {HasData:%v Up:%v Down:%v}, want up with data", ins.HasData, ins.Up, ins.Down)
+	}
+	if got := ins.Pct.String(); got != "4" {
+		t.Errorf("Insight.Pct = %s, want 4 (4.0%% this month)", got)
+	}
+	if got := ins.NetWorth.String(); got != "5200.0000 BRL" {
+		t.Errorf("Insight.NetWorth = %s, want 5200.0000 BRL", got)
+	}
+	if ins.Partial {
+		t.Errorf("Insight.Partial = true, want false (all BRL, no missing rate)")
+	}
+}
+
+// TestInsightEmptyAndPartial: an empty portfolio has no comparable baseline
+// (HasData false); a missing-rate currency flags Partial while a positive BRL
+// baseline keeps HasData true.
+func TestInsightEmptyAndPartial(t *testing.T) {
+	ctx := context.Background()
+	base := testDatabaseURL(t)
+
+	// Empty DB → non-positive baseline → HasData false.
+	emptyURL := isolatedDB(t, base)
+	if err := store.Migrate(ctx, emptyURL, db.Migrations); err != nil {
+		t.Fatalf("migrate empty: %v", err)
+	}
+	emptyPool, err := store.NewPool(ctx, emptyURL)
+	if err != nil {
+		t.Fatalf("pool empty: %v", err)
+	}
+	defer emptyPool.Close()
+	if err := settings.New(emptyPool).SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display: %v", err)
+	}
+	ins, err := New(emptyPool).Insight(ctx)
+	if err != nil {
+		t.Fatalf("Insight(empty): %v", err)
+	}
+	if ins.HasData {
+		t.Errorf("Insight(empty).HasData = true, want false (no baseline)")
+	}
+
+	// Partial: a positive BRL cash baseline + a USD holding with NO USD→BRL rate.
+	url := isolatedDB(t, base)
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	now := time.Now()
+	today := dateOnlyUTC(now)
+	monthStart := firstOfMonthUTC(now)
+	beforeMonth := monthStart.AddDate(0, 0, -3)
+	if err := settings.New(pool).SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display: %v", err)
+	}
+	wallet, err := accts.Create(ctx, fmt.Sprintf("W-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	if _, err := txns.Record(ctx, wallet.ID, transaction.Income, req("5000"), beforeMonth, "salary", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+	usb, err := accts.Create(ctx, fmt.Sprintf("USB-%d", run), account.Investment, money.USD)
+	if err != nil {
+		t.Fatalf("create usb: %v", err)
+	}
+	usec, err := secs.Create(ctx, fmt.Sprintf("US%d", run), "US Stock", security.Stock, money.USD)
+	if err != nil {
+		t.Fatalf("create usec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, usb.ID, usec.ID, req("5"), req("20"), req("0"), beforeMonth, "buy"); err != nil {
+		t.Fatalf("buy usd: %v", err)
+	}
+	if _, err := prices.Add(ctx, usec.ID, today, req("30")); err != nil {
+		t.Fatalf("price usd: %v", err)
+	}
+	ins, err = svc.Insight(ctx)
+	if err != nil {
+		t.Fatalf("Insight(partial): %v", err)
+	}
+	if !ins.Partial {
+		t.Errorf("Insight(partial).Partial = false, want true (USD has no rate)")
+	}
+}
+
 // assertRealized asserts the cumulative realized G/L for a currency.
 func assertRealized(t *testing.T, p Portfolio, cur money.Currency, want string) {
 	t.Helper()
