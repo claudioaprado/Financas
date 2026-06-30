@@ -798,7 +798,7 @@ func TestShellRenderedAfterLogin(t *testing.T) {
 		t.Fatalf("authed GET / = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Welcome back", "TestOwner", "Dashboard", "Investments", "Transactions", "Accounts", "Analytics", "/logout"} {
+	for _, want := range []string{"Bem-vindo(a) de volta", "TestOwner", "Painel", "Investimentos", "Transações", "Contas", "Análises", "/logout"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("shell missing %q", want)
 		}
@@ -826,7 +826,7 @@ func TestNavTargetAuthed(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authed GET /investments = %d, want 200", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Investments") || !strings.Contains(body, "Net worth") {
+	if body := rec.Body.String(); !strings.Contains(body, "Investimentos") || !strings.Contains(body, "Patrimônio líquido") {
 		t.Errorf("/investments page missing expected content")
 	}
 }
@@ -844,7 +844,7 @@ func TestInvestmentsPageRendersPortfolio(t *testing.T) {
 	}
 	body := rec.Body.String()
 	// Net Worth + Portfolio value (Display Currency) and a per-holding row.
-	for _, want := range []string{"Net worth", "1234.5000 BRL", "Portfolio value", "800.0000 BRL", "PETR4"} {
+	for _, want := range []string{"Patrimônio líquido", "1.234,50 BRL", "Valor da carteira", "800,00 BRL", "PETR4"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/investments page missing %q", want)
 		}
@@ -872,7 +872,7 @@ func TestInvestmentsPageWarnings(t *testing.T) {
 	}
 	body := rec.Body.String()
 	// Missing-rate warning links to /exchange-rates; unpriced note links to /prices.
-	for _, want := range []string{"excludes", "USD", "/exchange-rates", "VOO", "QQQ", "/prices"} {
+	for _, want := range []string{"exclui", "USD", "/exchange-rates", "VOO", "QQQ", "/prices"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/investments warnings missing %q", want)
 		}
@@ -893,10 +893,10 @@ func TestDashboardRendersKPIs(t *testing.T) {
 	body := rec.Body.String()
 	// Four KPI labels + their Display-Currency figures.
 	for _, want := range []string{
-		"Net worth", "1234.5000 BRL",
-		"Portfolio value", "800.0000 BRL",
-		"Total gain/loss", "100.0000 BRL",
-		"Cash", "434.5000 BRL",
+		"Patrimônio líquido", "1.234,50 BRL",
+		"Valor da carteira", "800,00 BRL",
+		"Ganho/perda total", "100,00 BRL",
+		"Caixa", "434,50 BRL",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)
@@ -904,7 +904,7 @@ func TestDashboardRendersKPIs(t *testing.T) {
 	}
 	// Per-card deltas: up arrow + magnitude, down arrow + magnitude, and a "—" for
 	// the gain card (no prior sample).
-	for _, want := range []string{"▲", "2.0%", "▼", "1.1%", "0.0%", "—"} {
+	for _, want := range []string{"▲", "2,0%", "▼", "1,1%", "0,0%", "—"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard delta missing %q", want)
 		}
@@ -936,7 +936,7 @@ func TestDashboardLossCardSingleMinus(t *testing.T) {
 		}
 	}
 	// Magnitude + loss colour + the single − sign from the primitive.
-	for _, want := range []string{"100.0000 BRL", "text-loss", "−"} {
+	for _, want := range []string{"100,00 BRL", "text-loss", "−"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("loss card missing %q", want)
 		}
@@ -956,7 +956,7 @@ func TestDashboardErrorBanner(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("dashboard (oversold) = %d, want 500", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "sell exceeds the quantity held") {
+	if !strings.Contains(rec.Body.String(), "venda excede a quantidade mantida") {
 		t.Errorf("dashboard error banner missing oversold hint")
 	}
 }
@@ -979,11 +979,11 @@ func TestDashboardRendersTrendChart(t *testing.T) {
 	body := dashboardBody(t, testDeps(true, nil), "/")
 	// The SVG trend, min/max + date labels, range toggle, and partial note.
 	for _, want := range []string{
-		"Net worth over time", "<svg", "<polyline", "<path",
-		"5000.0000 BRL", "5300.0000 BRL", // min / max labels
-		"2026-06-01", "2026-06-20", // start / end dates
+		"Patrimônio ao longo do tempo", "<svg", "<polyline", "<path",
+		"5.000,00 BRL", "5.300,00 BRL", // min / max labels
+		"01/06/2026", "20/06/2026", // start / end dates
 		"1M", "3M", "1Y", "All", "/?range=1m", "/?range=all",
-		"Some points are partial", // a partial point present
+		"Alguns pontos são parciais", // a partial point present
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard chart missing %q", want)
@@ -1013,7 +1013,7 @@ func TestDashboardChartEmptyState(t *testing.T) {
 		series:    cannedSeries()[:1], // a single point → not enough for a line
 	}
 	body := dashboardBody(t, deps, "/")
-	if !strings.Contains(body, "Not enough history yet") {
+	if !strings.Contains(body, "Ainda não há histórico suficiente") {
 		t.Errorf("single-point series should render the empty state")
 	}
 	if strings.Contains(body, "<polyline") {
@@ -1026,19 +1026,19 @@ func TestDashboardRendersAllocation(t *testing.T) {
 	// The donut SVG + arcs, the legend rows (key + percent + value), the centre
 	// total, the Security/Account toggle, and the partial note.
 	for _, want := range []string{
-		"Portfolio allocation", "<svg", "stroke-dasharray", "stroke-alloc-1", "bg-alloc-1",
-		"AAPL", "80%", "4000.0000 BRL", // legend slice 1
-		"PETR4", "20%", "1000.0000 BRL", // legend slice 2
-		"Total", "5000.0000 BRL", // centre total
-		"Security", "Account", "by=account", "by=security", // toggle links (& is HTML-escaped)
-		"Allocation excludes", "USD", // partial note
+		"Alocação da carteira", "<svg", "stroke-dasharray", "stroke-alloc-1", "bg-alloc-1",
+		"AAPL", "80%", "4.000,00 BRL", // legend slice 1
+		"PETR4", "20%", "1.000,00 BRL", // legend slice 2
+		"Total", "5.000,00 BRL", // centre total
+		"Ativo", "Conta", "by=account", "by=security", // toggle links (& is HTML-escaped)
+		"A alocação exclui", "USD", // partial note
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard allocation missing %q", want)
 		}
 	}
 	// Default dimension is Security → that link is current.
-	if !strings.Contains(body, `aria-current="true">Security`) {
+	if !strings.Contains(body, `aria-current="true">Ativo`) {
 		t.Errorf("default dimension Security should be marked current")
 	}
 	// The chart range links must preserve the active dimension (5.4 cross-preserve;
@@ -1058,13 +1058,13 @@ func TestDashboardAllocationByAccount(t *testing.T) {
 	a.Missing = nil
 	deps.Valuation = &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: a}
 	body := dashboardBody(t, deps, "/?by=account")
-	if !strings.Contains(body, `aria-current="true">Account`) {
+	if !strings.Contains(body, `aria-current="true">Conta`) {
 		t.Errorf("?by=account should mark the Account link current")
 	}
 	if !strings.Contains(body, "Broker A") {
 		t.Errorf("by-account allocation should list the account name")
 	}
-	if strings.Contains(body, "Allocation excludes") {
+	if strings.Contains(body, "A alocação exclui") {
 		t.Errorf("no missing currency → no partial note")
 	}
 }
@@ -1078,7 +1078,7 @@ func TestDashboardAllocationEmptyState(t *testing.T) {
 		allocation: valuation.Allocation{By: "security", Display: money.BRL, Total: money.New(decimal.Zero, money.BRL)},
 	}
 	body := dashboardBody(t, deps, "/")
-	if !strings.Contains(body, "No invested holdings to allocate yet") {
+	if !strings.Contains(body, "Ainda não há posições investidas para alocar") {
 		t.Errorf("no groups should render the allocation empty state")
 	}
 	// The donut should not render when there is no data (no arc dasharrays).
@@ -1100,14 +1100,14 @@ func TestDashboardAllocationErrorState(t *testing.T) {
 	body := dashboardBody(t, deps, "/")
 	// The apostrophe in "Couldn't" is HTML-escaped to &#39; in the rendered text,
 	// so match the unambiguous tail of the distinct error copy.
-	if !strings.Contains(body, "load your allocation right now") {
+	if !strings.Contains(body, "carregar sua alocação agora") {
 		t.Errorf("allocation error should render the distinct couldn't-load message")
 	}
-	if strings.Contains(body, "No invested holdings to allocate yet") {
+	if strings.Contains(body, "Ainda não há posições investidas para alocar") {
 		t.Errorf("an error must not render the no-data empty state (error ≠ no-data)")
 	}
 	// The rest of the dashboard survives the allocation error.
-	for _, want := range []string{"Net worth", "Net worth over time"} {
+	for _, want := range []string{"Patrimônio líquido", "Patrimônio ao longo do tempo"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard should still render %q despite the allocation error", want)
 		}
@@ -1117,10 +1117,10 @@ func TestDashboardAllocationErrorState(t *testing.T) {
 func TestDashboardRendersInsight(t *testing.T) {
 	body := dashboardBody(t, testDeps(true, nil), "/")
 	for _, want := range []string{
-		"Your net worth is up 4.0% this month", // the framed sentence
-		"▲", "up",                              // direction cue + sr-only label
+		"Seu patrimônio subiu 4,0% neste mês", // the framed sentence
+		"▲", "subiu",                          // direction cue + sr-only label
 		"text-accent", "bg-accent", // bold accent call-out identity
-		"Net worth 5200.0000 BRL", // context line
+		"Patrimônio líquido 5.200,00 BRL", // context line
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard insight missing %q", want)
@@ -1138,7 +1138,7 @@ func TestDashboardInsightEmptyState(t *testing.T) {
 		insight:    valuation.Insight{HasData: false}, // no month-start baseline
 	}
 	body := dashboardBody(t, deps, "/")
-	if !strings.Contains(body, "your net-worth trend will appear here") {
+	if !strings.Contains(body, "a evolução do seu patrimônio aparecerá aqui") {
 		t.Errorf("no-baseline insight should render the calm fallback")
 	}
 	// An insight load error must also not crash the page (KPIs still render).
@@ -1147,7 +1147,7 @@ func TestDashboardInsightEmptyState(t *testing.T) {
 		allocation: cannedAllocation(), insightErr: errors.New("boom"),
 	}
 	body = dashboardBody(t, deps, "/")
-	if !strings.Contains(body, "Net worth") {
+	if !strings.Contains(body, "Patrimônio líquido") {
 		t.Errorf("dashboard should still render despite an insight error")
 	}
 }
@@ -1160,9 +1160,9 @@ func TestDashboardRecentActivity(t *testing.T) {
 	}}
 	body := dashboardBody(t, deps, "/")
 	for _, want := range []string{
-		"Recent activity", "View all", `href="/transactions"`,
+		"Atividade recente", "Ver todos", `href="/transactions"`,
 		"Salary", "Groceries", "Food", // descriptions + category badge
-		"+5000.0000 USD", "-120.5000 USD", // signed amounts (stub Register uses USD)
+		"+5.000,00 USD", "-120,50 USD", // signed amounts (stub Register uses USD)
 		"text-gain", "text-loss", // income green / expense red
 	} {
 		if !strings.Contains(body, want) {
@@ -1174,7 +1174,7 @@ func TestDashboardRecentActivity(t *testing.T) {
 func TestDashboardRecentActivityEmpty(t *testing.T) {
 	// testDeps uses an empty stubTransactions → the widget shows its empty state.
 	body := dashboardBody(t, testDeps(true, nil), "/")
-	if !strings.Contains(body, "No transactions yet") {
+	if !strings.Contains(body, "Nenhuma transação ainda") {
 		t.Errorf("empty ledger should render the recent-activity empty state")
 	}
 }
@@ -1200,7 +1200,7 @@ func TestSettingsShowsAndUpdates(t *testing.T) {
 	if recGet.Code != http.StatusOK {
 		t.Fatalf("GET /settings = %d, want 200", recGet.Code)
 	}
-	for _, want := range []string{"Display currency", "USD", "BRL"} {
+	for _, want := range []string{"Moeda de exibição", "USD", "BRL"} {
 		if !strings.Contains(recGet.Body.String(), want) {
 			t.Errorf("settings page missing %q", want)
 		}
@@ -1239,7 +1239,7 @@ func TestExchangeRatesAddAndList(t *testing.T) {
 	// GET shows the add form.
 	recGet := httptest.NewRecorder()
 	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/exchange-rates", nil), cookie))
-	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Exchange rates") {
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Taxas de câmbio") {
 		t.Fatalf("GET /exchange-rates = %d, missing heading", recGet.Code)
 	}
 
@@ -1254,7 +1254,7 @@ func TestExchangeRatesAddAndList(t *testing.T) {
 	recList := httptest.NewRecorder()
 	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/exchange-rates", nil), cookie))
 	body := recList.Body.String()
-	for _, want := range []string{"USD", "BRL", "2024-01-01", "5.25"} {
+	for _, want := range []string{"USD", "BRL", "01/01/2024", "5,25"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rates list missing %q", want)
 		}
@@ -1287,7 +1287,7 @@ func TestAccountsCreateRenameArchive(t *testing.T) {
 	// GET shows the create form + the per-type balance labels.
 	recGet := httptest.NewRecorder()
 	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
-	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Create account") {
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Criar conta") {
 		t.Fatalf("GET /accounts = %d, missing create form", recGet.Code)
 	}
 
@@ -1301,7 +1301,7 @@ func TestAccountsCreateRenameArchive(t *testing.T) {
 	}
 	recList := httptest.NewRecorder()
 	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
-	if body := recList.Body.String(); !strings.Contains(body, "Checking") || !strings.Contains(body, "Cash balance") {
+	if body := recList.Body.String(); !strings.Contains(body, "Checking") || !strings.Contains(body, "Saldo em caixa") {
 		t.Errorf("accounts list missing the created account or its balance label")
 	}
 
@@ -1398,7 +1398,7 @@ func TestAccountTransactionsFlow(t *testing.T) {
 	}
 
 	// Empty register, zero balance.
-	if body := get(); !strings.Contains(body, "Add transaction") || !strings.Contains(body, "0.0000 USD") {
+	if body := get(); !strings.Contains(body, "Adicionar transação") || !strings.Contains(body, "0,00 USD") {
 		t.Errorf("fresh detail page missing add form or zero balance")
 	}
 
@@ -1406,7 +1406,7 @@ func TestAccountTransactionsFlow(t *testing.T) {
 	post("/accounts/1/transaction", "type=income&amount=100&date=2024-01-05&description=salary", http.StatusSeeOther)
 	post("/accounts/1/transaction", "type=expense&amount=30&date=2024-01-06&description=food", http.StatusSeeOther)
 	body := get()
-	for _, want := range []string{"+100.0000 USD", "-30.0000 USD", "70.0000 USD", "salary", "food"} {
+	for _, want := range []string{"+100,00 USD", "-30,00 USD", "70,00 USD", "salary", "food"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("register missing %q", want)
 		}
@@ -1414,13 +1414,13 @@ func TestAccountTransactionsFlow(t *testing.T) {
 
 	// Edit the expense (tx 2) 30 -> 50 -> balance 50.
 	post("/accounts/1/transaction/edit", "tx_id=2&type=expense&amount=50&date=2024-01-06&description=food", http.StatusSeeOther)
-	if body := get(); !strings.Contains(body, "50.0000 USD") {
+	if body := get(); !strings.Contains(body, "50,00 USD") {
 		t.Errorf("balance after edit should be 50.0000 USD")
 	}
 
 	// Delete the income (tx 1) -> balance -50.
 	post("/accounts/1/transaction/delete", "tx_id=1", http.StatusSeeOther)
-	if body := get(); !strings.Contains(body, "-50.0000 USD") {
+	if body := get(); !strings.Contains(body, "-50,00 USD") {
 		t.Errorf("balance after deleting income should be -50.0000 USD")
 	}
 
@@ -1459,10 +1459,10 @@ func TestCreditAccountShowsBalanceOwed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1", nil), cookie))
 	body := rec.Body.String()
-	if !strings.Contains(body, "Balance owed") {
+	if !strings.Contains(body, "Saldo devedor") {
 		t.Errorf("credit detail should label the balance 'Balance owed'")
 	}
-	if !strings.Contains(body, "530.0000 USD") {
+	if !strings.Contains(body, "530,00 USD") {
 		t.Errorf("credit detail should show the positive amount owed (530.0000 USD)")
 	}
 }
@@ -1501,14 +1501,14 @@ func TestTransferMovesBothBalances(t *testing.T) {
 
 	// Source shows -200 (one row, no double-count); destination shows +200.
 	src := bodyOf("/accounts/1")
-	if !strings.Contains(src, "-200.0000 USD") {
+	if !strings.Contains(src, "-200,00 USD") {
 		t.Errorf("source detail should reflect the outgoing -200.0000 USD")
 	}
 	if !strings.Contains(src, "transfer") {
 		t.Errorf("source register should list a transfer row")
 	}
 	dst := bodyOf("/accounts/2")
-	if !strings.Contains(dst, "+200.0000 USD") {
+	if !strings.Contains(dst, "+200,00 USD") {
 		t.Errorf("destination register should show the incoming +200.0000 USD")
 	}
 
@@ -1656,7 +1656,7 @@ func TestInvestmentAccountDetail(t *testing.T) {
 	// An investment account (id 1) renders the holdings/trade UI, not the
 	// income/expense form.
 	post("/accounts", "name=Broker&type=investment&currency=USD", http.StatusSeeOther)
-	if b := body("/accounts/1"); !strings.Contains(b, "Holdings") || !strings.Contains(b, "Cash balance") {
+	if b := body("/accounts/1"); !strings.Contains(b, "Posições") || !strings.Contains(b, "Saldo em caixa") {
 		t.Errorf("investment detail missing holdings/cash sections")
 	}
 
@@ -1665,7 +1665,7 @@ func TestInvestmentAccountDetail(t *testing.T) {
 	if b := body("/accounts/1"); !strings.Contains(b, "S1") {
 		t.Errorf("holdings table missing the bought security")
 	}
-	if b := body("/accounts/1"); !strings.Contains(b, "-50.0000 USD") {
+	if b := body("/accounts/1"); !strings.Contains(b, "-50,00 USD") {
 		t.Errorf("cash balance should be -50.0000 USD after the buy")
 	}
 
@@ -1703,7 +1703,7 @@ func TestPricesAddAndList(t *testing.T) {
 	// GET shows the prices page + the add form.
 	recGet := httptest.NewRecorder()
 	router.ServeHTTP(recGet, withCookie(httptest.NewRequest(http.MethodGet, "/prices", nil), cookie))
-	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Security prices") {
+	if recGet.Code != http.StatusOK || !strings.Contains(recGet.Body.String(), "Preços dos ativos") {
 		t.Fatalf("GET /prices = %d, missing heading", recGet.Code)
 	}
 
@@ -1718,7 +1718,7 @@ func TestPricesAddAndList(t *testing.T) {
 	recList := httptest.NewRecorder()
 	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/prices", nil), cookie))
 	body := recList.Body.String()
-	for _, want := range []string{"2024-06-01", "16.0000 BRL"} {
+	for _, want := range []string{"01/06/2024", "16,00 BRL"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("prices list missing %q", want)
 		}
@@ -1789,13 +1789,13 @@ func TestHoldingValuationColumns(t *testing.T) {
 	// 100×16 = 1600, unrealized 1600 − 1005 = 595.
 	txs.hold(1).price = decimal.RequireFromString("16")
 	b := get("/accounts/1")
-	if !strings.Contains(b, "1600.0000 USD") {
+	if !strings.Contains(b, "1.600,00 USD") {
 		t.Errorf("market value 1600.0000 USD missing after price set")
 	}
-	if !strings.Contains(b, "595.0000 USD") {
+	if !strings.Contains(b, "595,00 USD") {
 		t.Errorf("unrealized gain 595.0000 USD missing after price set")
 	}
-	if !strings.Contains(b, "as of 2026-06-01") {
+	if !strings.Contains(b, "em 01/06/2026") {
 		t.Errorf("price effective date (staleness) missing")
 	}
 }
@@ -1833,7 +1833,7 @@ func TestTransactionsRegister(t *testing.T) {
 	recFull := httptest.NewRecorder()
 	router.ServeHTTP(recFull, withCookie(httptest.NewRequest(http.MethodGet, "/transactions", nil), cookie))
 	full := recFull.Body.String()
-	for _, want := range []string{"All accounts", "All types", "wage", "food", "<!doctype html>", "htmx.min.js"} {
+	for _, want := range []string{"Todas as contas", "Todos os tipos", "wage", "food", "<!doctype html>", "htmx.min.js"} {
 		if !strings.Contains(strings.ToLower(full), strings.ToLower(want)) {
 			t.Errorf("full register page missing %q", want)
 		}
@@ -1845,7 +1845,7 @@ func TestTransactionsRegister(t *testing.T) {
 	hxReq.Header.Set("HX-Request", "true")
 	router.ServeHTTP(recHX, withCookie(hxReq, cookie))
 	hx := recHX.Body.String()
-	if strings.Contains(strings.ToLower(hx), "<!doctype") || strings.Contains(hx, "Welcome back") {
+	if strings.Contains(strings.ToLower(hx), "<!doctype") || strings.Contains(hx, "Bem-vindo(a) de volta") {
 		t.Errorf("HTMX response should be a bare partial, got shell markup")
 	}
 	if !strings.Contains(hx, "wage") || !strings.Contains(hx, "food") {
@@ -1889,7 +1889,7 @@ func TestImportPreviewAndCommit(t *testing.T) {
 	// Import form renders.
 	recForm := httptest.NewRecorder()
 	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1/import", nil), cookie))
-	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Import transactions") {
+	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Importar transações") {
 		t.Fatalf("import form = %d, missing heading", recForm.Code)
 	}
 
@@ -1902,7 +1902,7 @@ func TestImportPreviewAndCommit(t *testing.T) {
 	prev.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	router.ServeHTTP(recPrev, withCookie(prev, cookie))
 	pb := recPrev.Body.String()
-	for _, want := range []string{"Salary", "+5000.0000 USD", "error:", "Commit 1 new rows"} {
+	for _, want := range []string{"Salary", "+5.000,00 USD", "erro:", "Confirmar 1 novas linhas"} {
 		if !strings.Contains(pb, want) {
 			t.Errorf("preview missing %q", want)
 		}
@@ -2133,7 +2133,7 @@ func TestRestoreMissingConfirmRejected(t *testing.T) {
 	if stub.restoreCalled {
 		t.Error("Restore must not run without confirmation")
 	}
-	if !strings.Contains(rec.Body.String(), "Tick the box") {
+	if !strings.Contains(rec.Body.String(), "Marque a caixa") {
 		t.Error("expected a confirm-required message")
 	}
 }
@@ -2153,7 +2153,7 @@ func TestRestoreServiceErrorRendersReason(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("version-error POST /restore = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "incompatible version") {
+	if !strings.Contains(rec.Body.String(), "versão incompatível") {
 		t.Errorf("expected an incompatible-version message, body = %s", rec.Body.String())
 	}
 }
@@ -2161,14 +2161,14 @@ func TestRestoreServiceErrorRendersReason(t *testing.T) {
 func TestSettingsShowsRestoreFormAndNotice(t *testing.T) {
 	// The restore form is present on the settings page.
 	body := authedGet(t, testDeps(true, nil), "/settings")
-	for _, want := range []string{`action="/restore"`, `enctype="multipart/form-data"`, `name="confirm"`, `name="file"`, "replaces all"} {
+	for _, want := range []string{`action="/restore"`, `enctype="multipart/form-data"`, `name="confirm"`, `name="file"`, "substitui todos"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing restore-form bit %q", want)
 		}
 	}
 	// The ?restored=1 success notice renders.
 	notice := authedGet(t, testDeps(true, nil), "/settings?restored=1")
-	if !strings.Contains(notice, "restored from the backup") {
+	if !strings.Contains(notice, "restaurados do backup") {
 		t.Error("settings page missing the restored success notice")
 	}
 }

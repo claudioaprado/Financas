@@ -31,7 +31,7 @@ func Login(errorMsg string) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Sign in · Financas</title><link rel=\"stylesheet\" href=\"/static/css/app.css\"></head><body class=\"bg-slate-50 text-slate-900\"><main class=\"mx-auto max-w-sm p-8\"><h1 class=\"text-2xl font-bold mb-4\">Financas</h1>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Entrar · Financas</title><link rel=\"stylesheet\" href=\"/static/css/app.css\"></head><body class=\"bg-slate-50 text-slate-900\"><main class=\"mx-auto max-w-sm p-8\"><h1 class=\"text-2xl font-bold mb-4\">Financas</h1>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -54,7 +54,7 @@ func Login(errorMsg string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<form method=\"post\" action=\"/login\" class=\"space-y-3\"><div><label class=\"block text-sm\" for=\"username\">Username</label> <input class=\"border rounded px-2 py-1 w-full\" id=\"username\" name=\"username\" autocomplete=\"username\" required></div><div><label class=\"block text-sm\" for=\"password\">Password</label> <input class=\"border rounded px-2 py-1 w-full\" id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required></div><button class=\"rounded bg-slate-900 px-3 py-1.5 text-white\" type=\"submit\">Sign in</button></form></main></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<form method=\"post\" action=\"/login\" class=\"space-y-3\"><div><label class=\"block text-sm\" for=\"username\">Usuário</label> <input class=\"border rounded px-2 py-1 w-full\" id=\"username\" name=\"username\" autocomplete=\"username\" required></div><div><label class=\"block text-sm\" for=\"password\">Senha</label> <input class=\"border rounded px-2 py-1 w-full\" id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required></div><button class=\"rounded bg-slate-900 px-3 py-1.5 text-white\" type=\"submit\">Entrar</button></form></main></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

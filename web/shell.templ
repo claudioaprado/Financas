@@ -6,7 +6,7 @@ package web
 // Story 5.1 extends the visual system with component primitives.
 templ Shell(data ShellData) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang="pt-BR">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -17,17 +17,17 @@ templ Shell(data ShellData) {
 			<header class="border-b border-black/5 bg-white">
 				<div class="relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
 					<div>
-						<p class="text-sm text-muted">Welcome back,</p>
+						<p class="text-sm text-muted">Bem-vindo(a) de volta,</p>
 						<p class="text-lg font-bold">{ data.OwnerName }</p>
 					</div>
 					@navMenu(data.Active)
 					<div class="flex items-center gap-3">
 						if data.DisplayCurrency != "" {
-							<span class="rounded-card bg-surface px-2 py-1 text-xs font-medium text-muted" title="Display currency">{ data.DisplayCurrency }</span>
+							<span class="rounded-card bg-surface px-2 py-1 text-xs font-medium text-muted" title="Moeda de exibição">{ data.DisplayCurrency }</span>
 						}
-						<a href="/settings" class="text-sm text-muted hover:text-ink">Settings</a>
+						<a href="/settings" class="text-sm text-muted hover:text-ink">Configurações</a>
 						<form method="post" action="/logout">
-							<button class="rounded-card px-3 py-1.5 text-sm text-muted hover:text-ink" type="submit">Log out</button>
+							<button class="rounded-card px-3 py-1.5 text-sm text-muted hover:text-ink" type="submit">Sair</button>
 						</form>
 					</div>
 				</div>
@@ -43,14 +43,14 @@ templ Shell(data ShellData) {
 // navMenu renders the primary navigation: an inline row on md+ screens and a
 // no-JS <details> disclosure on small screens.
 templ navMenu(active string) {
-	<nav class="hidden gap-1 md:flex" aria-label="Primary">
+	<nav class="hidden gap-1 md:flex" aria-label="Principal">
 		for _, item := range NavItems {
 			@navLink(item, active, "rounded-card px-3 py-1.5 text-sm font-medium")
 		}
 	</nav>
 	<details class="md:hidden">
 		<summary class="cursor-pointer rounded-card px-3 py-1.5 text-sm font-medium text-muted">Menu</summary>
-		<nav class="absolute right-4 top-full z-10 mt-1 flex w-48 flex-col gap-1 rounded-card bg-white p-2 shadow-card" aria-label="Primary">
+		<nav class="absolute right-4 top-full z-10 mt-1 flex w-48 flex-col gap-1 rounded-card bg-white p-2 shadow-card" aria-label="Principal">
 			for _, item := range NavItems {
 				@navLink(item, active, "rounded px-3 py-2 text-sm")
 			}

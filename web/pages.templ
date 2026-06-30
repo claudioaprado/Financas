@@ -8,7 +8,7 @@ package web
 // renders pre-formatted figures only — no math (AD-1).
 templ DashboardPage(data ShellData, view DashboardView) {
 	@Shell(data) {
-		<h1 class="text-2xl font-bold">Dashboard</h1>
+		<h1 class="text-2xl font-bold">Painel</h1>
 		if view.ErrMsg != "" {
 			@Card("mt-4") {
 				<p class="rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ view.ErrMsg }</p>
@@ -27,12 +27,12 @@ templ DashboardPage(data ShellData, view DashboardView) {
 			@recentTransactions(view.Recent)
 			if view.MissingCodes != "" {
 				<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-					Totals exclude <span class="font-semibold">{ view.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+					Os totais excluem <span class="font-semibold">{ view.MissingCodes }</span> — sem taxa para a moeda de exibição. <a href="/exchange-rates" class="text-accent underline">Adicionar taxa</a>
 				</p>
 			}
 			if view.UnpricedSymbols != "" {
 				<p class="mt-3 text-sm text-muted">
-					No price for <span class="font-medium">{ view.UnpricedSymbols }</span> — excluded from portfolio value. <a href="/prices" class="text-accent hover:underline">Add prices</a>
+					Sem preço para <span class="font-medium">{ view.UnpricedSymbols }</span> — excluído do valor da carteira. <a href="/prices" class="text-accent hover:underline">Adicionar preços</a>
 				</p>
 			}
 		}
@@ -48,7 +48,7 @@ templ trendChart(c ChartView) {
 	@Card("mt-4") {
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<h2 class="text-label text-muted">
-				Net worth over time
+				Patrimônio ao longo do tempo
 				if c.Display != "" {
 					({ c.Display })
 				}
@@ -66,7 +66,7 @@ templ trendChart(c ChartView) {
 			</div>
 		</div>
 		if c.HasData {
-			<svg viewBox="0 0 1000 300" class="mt-3 w-full" role="img" aria-label="Net worth over time">
+			<svg viewBox="0 0 1000 300" class="mt-3 w-full" role="img" aria-label="Patrimônio ao longo do tempo">
 				<path d={ c.Area } class="fill-accent/10"></path>
 				<polyline points={ c.Line } fill="none" class="stroke-accent" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></polyline>
 				for _, p := range c.Points {
@@ -79,7 +79,7 @@ templ trendChart(c ChartView) {
 				<span>{ c.EndLabel }</span>
 			</div>
 			if c.Partial {
-				<p class="mt-2 text-xs text-muted">Some points are partial — a held currency had no exchange rate to the display currency on that date.</p>
+				<p class="mt-2 text-xs text-muted">Alguns pontos são parciais — uma moeda mantida não tinha taxa de câmbio para a moeda de exibição nessa data.</p>
 			}
 		} else {
 			<p class="mt-3 text-sm text-muted">{ c.Empty }</p>
@@ -98,7 +98,7 @@ templ allocationCard(a AllocationView) {
 	@Card("mt-4") {
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<h2 class="text-label text-muted">
-				Allocation
+				Alocação
 				if a.Display != "" {
 					({ a.Display })
 				}
@@ -117,7 +117,7 @@ templ allocationCard(a AllocationView) {
 		</div>
 		if a.HasData {
 			<div class="mt-3 flex flex-wrap items-center gap-6">
-				<svg viewBox="0 0 200 200" class="h-40 w-40 shrink-0" role="img" aria-label="Portfolio allocation">
+				<svg viewBox="0 0 200 200" class="h-40 w-40 shrink-0" role="img" aria-label="Alocação da carteira">
 					<g transform="rotate(-90 100 100)">
 						<circle cx="100" cy="100" r="70" fill="none" stroke-width="30" class="stroke-muted/15"></circle>
 						for _, s := range a.Slices {
@@ -149,7 +149,7 @@ templ allocationCard(a AllocationView) {
 			</div>
 			if a.Partial {
 				<p class="mt-2 text-xs text-muted">
-					Allocation excludes <span class="font-semibold">{ a.MissingCodes }</span> — no rate to the display currency. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+					A alocação exclui <span class="font-semibold">{ a.MissingCodes }</span> — sem taxa para a moeda de exibição. <a href="/exchange-rates" class="text-accent underline">Adicionar taxa</a>
 				</p>
 			}
 		} else {
@@ -171,15 +171,15 @@ templ insightCallout(i InsightView) {
 					<p class="text-base font-semibold text-ink">
 						{ i.Text }
 						if i.Up {
-							<span class="text-gain">▲<span class="sr-only">up</span></span>
+							<span class="text-gain">▲<span class="sr-only">subiu</span></span>
 						}
 						if i.Down {
-							<span class="text-loss">▼<span class="sr-only">down</span></span>
+							<span class="text-loss">▼<span class="sr-only">caiu</span></span>
 						}
 					</p>
-					<p class="text-sm text-muted">Net worth { i.NetWorth }</p>
+					<p class="text-sm text-muted">Patrimônio líquido { i.NetWorth }</p>
 					if i.Partial {
-						<p class="mt-1 text-xs text-muted">Partial — a held currency had no exchange rate to the display currency.</p>
+						<p class="mt-1 text-xs text-muted">Parcial — uma moeda mantida não tinha taxa de câmbio para a moeda de exibição.</p>
 					}
 				</div>
 			</div>
@@ -196,11 +196,11 @@ templ insightCallout(i InsightView) {
 templ recentTransactions(rows []RegisterRow) {
 	@Card("mt-4") {
 		<div class="flex items-center justify-between">
-			<h2 class="text-label text-muted">Recent activity</h2>
-			<a href="/transactions" class="text-xs text-accent hover:underline">View all →</a>
+			<h2 class="text-label text-muted">Atividade recente</h2>
+			<a href="/transactions" class="text-xs text-accent hover:underline">Ver todos →</a>
 		</div>
 		if len(rows) == 0 {
-			<p class="mt-3 text-sm text-muted">No transactions yet — add one to get started.</p>
+			<p class="mt-3 text-sm text-muted">Nenhuma transação ainda — adicione uma para começar.</p>
 		} else {
 			<ul class="mt-3 divide-y divide-black/5">
 				for _, r := range rows {
@@ -274,14 +274,14 @@ templ kpiCard(c KPICardView) {
 // or the "—" empty state until a comparable prior sample exists (UX-DR8).
 templ deltaBadge(d DeltaText) {
 	if d.None {
-		<span class="text-sm text-muted" title="No prior sample to compare yet">—</span>
+		<span class="text-sm text-muted" title="Nenhuma amostra anterior para comparar">—</span>
 	} else {
 		<span class={ "inline-flex items-center gap-1 text-sm font-medium", templ.KV("text-gain", d.Up), templ.KV("text-loss", d.Down) }>
 			if d.Up {
-				<span aria-hidden="true">▲</span><span class="sr-only">up </span>
+				<span aria-hidden="true">▲</span><span class="sr-only">subiu </span>
 			}
 			if d.Down {
-				<span aria-hidden="true">▼</span><span class="sr-only">down </span>
+				<span aria-hidden="true">▼</span><span class="sr-only">caiu </span>
 			}
 			{ d.Display }
 		</span>
@@ -311,7 +311,7 @@ templ ComingSoon(data ShellData, title string) {
 	@Shell(data) {
 		<section class="rounded-card bg-white p-6 shadow-card">
 			<h1 class="text-2xl font-bold">{ title }</h1>
-			<p class="mt-1 text-muted">Coming soon.</p>
+			<p class="mt-1 text-muted">Em breve.</p>
 		</section>
 	}
 }
@@ -324,22 +324,22 @@ templ ComingSoon(data ShellData, title string) {
 templ InvestmentsPage(data ShellData, v InvestmentsView) {
 	@Shell(data) {
 		@Card("") {
-			<h1 class="text-2xl font-bold">Investments</h1>
+			<h1 class="text-2xl font-bold">Investimentos</h1>
 			if v.ErrMsg != "" {
 				<p class="mt-4 rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ v.ErrMsg }</p>
 			} else {
 				<div class="mt-4">
-					<p class="text-label text-muted">Net worth ({ v.Display })</p>
+					<p class="text-label text-muted">Patrimônio líquido ({ v.Display })</p>
 					@Amount(MoneyText{Display: v.NetWorth}, AmountHero)
 				</div>
 				<div class="mt-4 flex flex-wrap gap-8">
 					<div>
-						<p class="text-label text-muted">Portfolio value</p>
+						<p class="text-label text-muted">Valor da carteira</p>
 						@Amount(MoneyText{Display: v.PortfolioValue}, AmountStat)
 					</div>
 					if len(v.Realized) > 0 {
 						<div>
-							<p class="text-sm text-muted">Cumulative realized G/L</p>
+							<p class="text-sm text-muted">Ganho/perda realizado(a) acumulado(a)</p>
 							<div class="mt-1 flex flex-wrap gap-2">
 								for _, c := range v.Realized {
 									<span class={ "rounded bg-black/5 px-2 py-0.5 text-sm font-medium", templ.KV("text-gain", c.Positive), templ.KV("text-loss", c.Negative) }>{ c.Amount }</span>
@@ -350,30 +350,30 @@ templ InvestmentsPage(data ShellData, v InvestmentsView) {
 				</div>
 				if v.MissingCodes != "" {
 					<p class="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-						Net worth excludes <span class="font-semibold">{ v.MissingCodes }</span> — no rate to { v.Display }. <a href="/exchange-rates" class="text-accent underline">Add a rate</a>
+						O patrimônio líquido exclui <span class="font-semibold">{ v.MissingCodes }</span> — sem taxa para { v.Display }. <a href="/exchange-rates" class="text-accent underline">Adicionar taxa</a>
 					</p>
 				}
 				if v.UnpricedSymbols != "" {
 					<p class="mt-3 text-sm text-muted">
-						No price for <span class="font-medium">{ v.UnpricedSymbols }</span> — excluded from portfolio value. <a href="/prices" class="text-accent hover:underline">Add prices</a>
+						Sem preço para <span class="font-medium">{ v.UnpricedSymbols }</span> — excluído do valor da carteira. <a href="/prices" class="text-accent hover:underline">Adicionar preços</a>
 					</p>
 				}
-				<h2 class="mt-6 text-sm font-semibold text-muted">Holdings</h2>
+				<h2 class="mt-6 text-sm font-semibold text-muted">Posições</h2>
 				<table class="mt-2 w-full text-sm">
 					<thead>
 						<tr class="text-left text-muted">
-							<th class="py-1">Account</th>
-							<th>Security</th>
-							<th class="text-right">Quantity</th>
-							<th class="text-right">Price</th>
-							<th class="text-right">Market value</th>
-							<th class="text-right">Cost basis</th>
-							<th class="text-right">Unrealized G/L</th>
+							<th class="py-1">Conta</th>
+							<th>Ativo</th>
+							<th class="text-right">Quantidade</th>
+							<th class="text-right">Preço</th>
+							<th class="text-right">Valor de mercado</th>
+							<th class="text-right">Custo de aquisição</th>
+							<th class="text-right">Ganho/Perda não realizado(a)</th>
 						</tr>
 					</thead>
 					<tbody>
 						if len(v.Holdings) == 0 {
-							<tr><td colspan="7" class="py-2 text-muted">No holdings yet.</td></tr>
+							<tr><td colspan="7" class="py-2 text-muted">Nenhuma posição ainda.</td></tr>
 						}
 						for _, h := range v.Holdings {
 							<tr class="border-t border-black/5">
@@ -381,7 +381,7 @@ templ InvestmentsPage(data ShellData, v InvestmentsView) {
 								<td class="font-medium">{ h.Symbol } <span class="text-muted">{ h.Name }</span></td>
 								<td class="text-right">{ h.Quantity }</td>
 								if h.HasPrice {
-									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">as of { h.PriceDate }</span></td>
+									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">em { h.PriceDate }</span></td>
 									<td class="text-right">{ h.Valuation }</td>
 									<td class="text-right">{ h.CostBasis }</td>
 									<td class={ "text-right", templ.KV("text-gain", h.UnrealizedPositive), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
@@ -405,28 +405,28 @@ templ InvestmentsPage(data ShellData, v InvestmentsView) {
 templ SettingsPage(data ShellData, currencies []string, notice string, noticeIsError bool) {
 	@Shell(data) {
 		<section class="max-w-md rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Settings</h1>
+			<h1 class="text-2xl font-bold">Configurações</h1>
 			<form method="post" action="/settings" class="mt-4 space-y-3">
 				<div>
-					<label class="block text-sm" for="currency">Display currency</label>
+					<label class="block text-sm" for="currency">Moeda de exibição</label>
 					<select id="currency" name="currency" class="mt-1 rounded border px-2 py-1">
 						for _, c := range currencies {
 							<option value={ c } selected?={ c == data.DisplayCurrency }>{ c }</option>
 						}
 					</select>
-					<p class="mt-1 text-xs text-muted">Totals are shown in this currency. Stored amounts keep their own currency.</p>
+					<p class="mt-1 text-xs text-muted">Os totais são exibidos nesta moeda. Os valores armazenados mantêm sua própria moeda.</p>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Save</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Salvar</button>
 			</form>
-			<p class="mt-4 text-sm"><a href="/exchange-rates" class="text-accent hover:underline">Manage exchange rates →</a></p>
-			<p class="mt-1 text-sm"><a href="/categories" class="text-accent hover:underline">Manage categories →</a></p>
-			<p class="mt-1 text-sm"><a href="/securities" class="text-accent hover:underline">Manage securities →</a></p>
-			<p class="mt-1 text-sm"><a href="/prices" class="text-accent hover:underline">Manage prices →</a></p>
+			<p class="mt-4 text-sm"><a href="/exchange-rates" class="text-accent hover:underline">Gerenciar taxas de câmbio →</a></p>
+			<p class="mt-1 text-sm"><a href="/categories" class="text-accent hover:underline">Gerenciar categorias →</a></p>
+			<p class="mt-1 text-sm"><a href="/securities" class="text-accent hover:underline">Gerenciar ativos →</a></p>
+			<p class="mt-1 text-sm"><a href="/prices" class="text-accent hover:underline">Gerenciar preços →</a></p>
 		</section>
 		<section class="mt-6 max-w-md rounded-card bg-white p-6 shadow-card">
-			<h2 class="text-lg font-bold">Backup &amp; restore</h2>
-			<p class="mt-1 text-sm text-muted">Download a single file with all your accounts, transactions, securities, prices and exchange rates. Keep it somewhere safe — it's your backup.</p>
-			<a href="/export" class="mt-3 inline-block rounded bg-slate-900 px-3 py-1.5 text-white">Download my data</a>
+			<h2 class="text-lg font-bold">Backup e restauração</h2>
+			<p class="mt-1 text-sm text-muted">Baixe um arquivo com todas as suas contas, transações, ativos, preços e taxas de câmbio. Guarde-o em um lugar seguro — é o seu backup.</p>
+			<a href="/export" class="mt-3 inline-block rounded bg-slate-900 px-3 py-1.5 text-white">Baixar meus dados</a>
 			if notice != "" {
 				if noticeIsError {
 					<p class="mt-4 rounded border border-loss/40 bg-loss/10 px-3 py-2 text-sm text-loss">{ notice }</p>
@@ -435,14 +435,14 @@ templ SettingsPage(data ShellData, currencies []string, notice string, noticeIsE
 				}
 			}
 			<form method="post" action="/restore" enctype="multipart/form-data" class="mt-5 space-y-3 border-t pt-4">
-				<h3 class="text-sm font-semibold">Restore from a backup</h3>
-				<p class="text-xs text-muted">Uploading a backup <span class="font-semibold text-loss">replaces all of your current data</span> with the file's contents. This can't be undone.</p>
+				<h3 class="text-sm font-semibold">Restaurar a partir de um backup</h3>
+				<p class="text-xs text-muted">O envio de um backup <span class="font-semibold text-loss">substitui todos os seus dados atuais</span> pelo conteúdo do arquivo. Essa ação não pode ser desfeita.</p>
 				<input type="file" name="file" accept=".json,application/json" required class="block w-full text-sm"/>
 				<label class="flex items-start gap-2 text-xs text-muted">
 					<input type="checkbox" name="confirm" class="mt-0.5"/>
-					<span>I understand this replaces all my current data with the backup's contents.</span>
+					<span>Entendo que isso substitui todos os meus dados atuais pelo conteúdo do backup.</span>
 				</label>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Restore from backup</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Restaurar do backup</button>
 			</form>
 		</section>
 	}
@@ -455,18 +455,18 @@ templ SettingsPage(data ShellData, currencies []string, notice string, noticeIsE
 templ AccountsPage(data ShellData, accounts []AccountRow, types []string, currencies []string, showArchived bool, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Accounts</h1>
-			<p class="mt-1 text-sm text-muted">Cash, credit, and investment accounts, each in its own base currency. Balances are derived from your transactions in later steps; archived accounts are kept for history but excluded from default views and Net Worth.</p>
+			<h1 class="text-2xl font-bold">Contas</h1>
+			<p class="mt-1 text-sm text-muted">Contas de caixa, crédito e investimento, cada uma em sua própria moeda base. Os saldos são derivados de suas transações em etapas posteriores; contas arquivadas são mantidas para histórico, mas excluídas das visualizações padrão e do patrimônio líquido.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action="/accounts" class="mt-4 flex flex-wrap items-end gap-2">
 				<div>
-					<label class="block text-xs" for="name">Name</label>
+					<label class="block text-xs" for="name">Nome</label>
 					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="type">Type</label>
+					<label class="block text-xs" for="type">Tipo</label>
 					<select id="type" name="type" class="rounded border px-2 py-1">
 						for _, t := range types {
 							<option value={ t }>{ t }</option>
@@ -474,49 +474,49 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="currency">Currency</label>
+					<label class="block text-xs" for="currency">Moeda</label>
 					<select id="currency" name="currency" class="rounded border px-2 py-1">
 						for _, c := range currencies {
 							<option value={ c }>{ c }</option>
 						}
 					</select>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Create account</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Criar conta</button>
 			</form>
 			<div class="mt-6 flex items-center justify-between">
 				<h2 class="text-sm font-semibold text-muted">
 					if showArchived {
-						All accounts
+						Todas as contas
 					} else {
-						Active accounts
+						Contas ativas
 					}
 				</h2>
 				if showArchived {
-					<a href="/accounts" class="text-sm text-accent hover:underline">Hide archived</a>
+					<a href="/accounts" class="text-sm text-accent hover:underline">Ocultar arquivadas</a>
 				} else {
-					<a href="/accounts?show=archived" class="text-sm text-accent hover:underline">Show archived</a>
+					<a href="/accounts?show=archived" class="text-sm text-accent hover:underline">Mostrar arquivadas</a>
 				}
 			</div>
 			<table class="mt-2 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Name</th>
-						<th>Type</th>
-						<th>Currency</th>
-						<th>Balance</th>
-						<th class="text-right">Actions</th>
+						<th class="py-1">Nome</th>
+						<th>Tipo</th>
+						<th>Moeda</th>
+						<th>Saldo</th>
+						<th class="text-right">Ações</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(accounts) == 0 {
-						<tr><td colspan="5" class="py-2 text-muted">No accounts yet.</td></tr>
+						<tr><td colspan="5" class="py-2 text-muted">Nenhuma conta ainda.</td></tr>
 					}
 					for _, a := range accounts {
 						<tr class="border-t border-black/5">
 							<td class="py-1">
 								<a href={ templ.URL("/accounts/" + accountID(a.ID)) } class="text-accent hover:underline">{ a.Name }</a>
 								if a.Archived {
-									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">archived</span>
+									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">arquivado</span>
 								}
 							</td>
 							<td>{ a.Type }</td>
@@ -527,7 +527,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 									<form method="post" action="/accounts/rename" class="flex items-center gap-1">
 										<input type="hidden" name="id" value={ accountID(a.ID) }/>
 										<input name="name" value={ a.Name } required class="w-36 rounded border px-2 py-1"/>
-										<button class="rounded border px-2 py-1" type="submit">Rename</button>
+										<button class="rounded border px-2 py-1" type="submit">Renomear</button>
 									</form>
 									<form method="post" action="/accounts/archive">
 										<input type="hidden" name="id" value={ accountID(a.ID) }/>
@@ -536,10 +536,10 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 										}
 										if a.Archived {
 											<input type="hidden" name="archived" value="false"/>
-											<button class="rounded border px-2 py-1" type="submit">Unarchive</button>
+											<button class="rounded border px-2 py-1" type="submit">Desarquivar</button>
 										} else {
 											<input type="hidden" name="archived" value="true"/>
-											<button class="rounded border px-2 py-1" type="submit">Archive</button>
+											<button class="rounded border px-2 py-1" type="submit">Arquivar</button>
 										}
 									</form>
 								</div>
@@ -559,11 +559,11 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, balanceLabel, balance string, types []string, categories []CategoryOption, txns []TxRow, editing bool, edit TxRow, transferTargets []TransferTarget, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
-			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
+			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Contas</a></p>
 			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
 			<p class="text-sm text-muted">{ accType } · { currency }</p>
 			if accType != "investment" {
-				<p class="mt-1 text-sm"><a href={ templ.URL("/accounts/" + accountID(acctID) + "/import") } class="text-accent hover:underline">Import transactions →</a></p>
+				<p class="mt-1 text-sm"><a href={ templ.URL("/accounts/" + accountID(acctID) + "/import") } class="text-accent hover:underline">Importar transações →</a></p>
 			}
 			<div class="mt-4">
 				<p class="text-sm text-muted">{ balanceLabel }</p>
@@ -574,9 +574,9 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 			}
 			<h2 class="mt-6 text-sm font-semibold text-muted">
 				if editing {
-					Edit transaction
+					Editar transação
 				} else {
-					Add transaction
+					Adicionar transação
 				}
 			</h2>
 			<form
@@ -592,7 +592,7 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					<input type="hidden" name="tx_id" value={ accountID(edit.ID) }/>
 				}
 				<div>
-					<label class="block text-xs" for="type">Type</label>
+					<label class="block text-xs" for="type">Tipo</label>
 					<select id="type" name="type" class="rounded border px-2 py-1">
 						for _, ty := range types {
 							<option value={ ty } selected?={ editing && ty == edit.Type }>{ ty }</option>
@@ -600,20 +600,20 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="amount">Amount</label>
+					<label class="block text-xs" for="amount">Valor</label>
 					<input id="amount" name="amount" inputmode="decimal" required value={ edit.Amount } class="w-28 rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="date">Date</label>
-					<input id="date" name="date" type="date" required value={ edit.Date } class="rounded border px-2 py-1"/>
+					<label class="block text-xs" for="date">Data</label>
+					<input id="date" name="date" type="date" required value={ edit.EditDate } class="rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="description">Description</label>
+					<label class="block text-xs" for="description">Descrição</label>
 					<input id="description" name="description" value={ edit.Description } class="w-48 rounded border px-2 py-1"/>
 				</div>
 				if len(categories) > 0 {
 					<div>
-						<label class="block text-xs" for="category_id">Category</label>
+						<label class="block text-xs" for="category_id">Categoria</label>
 						<select id="category_id" name="category_id" class="rounded border px-2 py-1">
 							<option value="">— none —</option>
 							for _, c := range categories {
@@ -624,20 +624,20 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 				}
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">
 					if editing {
-						Save
+						Salvar
 					} else {
-						Add
+						Adicionar
 					}
 				</button>
 				if editing {
-					<a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-sm text-accent hover:underline">Cancel</a>
+					<a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-sm text-accent hover:underline">Cancelar</a>
 				}
 			</form>
 			if len(transferTargets) > 0 {
-				<h2 class="mt-6 text-sm font-semibold text-muted">Transfer to another account</h2>
+				<h2 class="mt-6 text-sm font-semibold text-muted">Transferir para outra conta</h2>
 				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transfer") } class="mt-2 flex flex-wrap items-end gap-2">
 					<div>
-						<label class="block text-xs" for="to_account_id">To account</label>
+						<label class="block text-xs" for="to_account_id">Conta de destino</label>
 						<select id="to_account_id" name="to_account_id" class="rounded border px-2 py-1">
 							for _, tt := range transferTargets {
 								<option value={ accountID(tt.ID) }>{ tt.Name } ({ tt.Currency })</option>
@@ -645,37 +645,37 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 						</select>
 					</div>
 					<div>
-						<label class="block text-xs" for="from_amount">Amount ({ currency })</label>
+						<label class="block text-xs" for="from_amount">Valor ({ currency })</label>
 						<input id="from_amount" name="from_amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="to_amount">Received</label>
-						<input id="to_amount" name="to_amount" inputmode="decimal" placeholder="if diff. currency" class="w-32 rounded border px-2 py-1"/>
+						<label class="block text-xs" for="to_amount">Recebido</label>
+						<input id="to_amount" name="to_amount" inputmode="decimal" placeholder="se moeda diferente" class="w-32 rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="transfer_date">Date</label>
+						<label class="block text-xs" for="transfer_date">Data</label>
 						<input id="transfer_date" name="date" type="date" required class="rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="transfer_desc">Description</label>
+						<label class="block text-xs" for="transfer_desc">Descrição</label>
 						<input id="transfer_desc" name="description" class="w-40 rounded border px-2 py-1"/>
 					</div>
-					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Transfer</button>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Transferir</button>
 				</form>
 			}
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Date</th>
-						<th>Type</th>
-						<th>Description</th>
-						<th class="text-right">Amount</th>
-						<th class="text-right">Actions</th>
+						<th class="py-1">Data</th>
+						<th>Tipo</th>
+						<th>Descrição</th>
+						<th class="text-right">Valor</th>
+						<th class="text-right">Ações</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(txns) == 0 {
-						<tr><td colspan="5" class="py-2 text-muted">No transactions yet.</td></tr>
+						<tr><td colspan="5" class="py-2 text-muted">Nenhuma transação ainda.</td></tr>
 					}
 					for _, tr := range txns {
 						<tr class="border-t border-black/5">
@@ -686,9 +686,9 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 								if tr.Counterparty != "" {
 									<span class="text-muted">
 										if tr.Incoming {
-											· from { tr.Counterparty }
+											· de { tr.Counterparty }
 										} else {
-											· to { tr.Counterparty }
+											· para { tr.Counterparty }
 										}
 									</span>
 								}
@@ -700,11 +700,11 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 							<td>
 								<div class="flex items-center justify-end gap-2">
 									if tr.Editable {
-										<a href={ templ.URL("/accounts/" + accountID(acctID) + "?edit=" + accountID(tr.ID)) } class="rounded border px-2 py-1">Edit</a>
+										<a href={ templ.URL("/accounts/" + accountID(acctID) + "?edit=" + accountID(tr.ID)) } class="rounded border px-2 py-1">Editar</a>
 									}
 									<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/delete") }>
 										<input type="hidden" name="tx_id" value={ accountID(tr.ID) }/>
-										<button class="rounded border px-2 py-1" type="submit">Delete</button>
+										<button class="rounded border px-2 py-1" type="submit">Excluir</button>
 									</form>
 								</div>
 							</td>
@@ -723,36 +723,36 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, cashBalance, errMsg string, holdings []HoldingRow, realizedGain string, oversold bool, securities []SecurityChoice, txns []TxRow) {
 	@Shell(data) {
 		<section class="max-w-4xl rounded-card bg-white p-6 shadow-card">
-			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Accounts</a></p>
+			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Contas</a></p>
 			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
-			<p class="text-sm text-muted">investment · { currency }</p>
+			<p class="text-sm text-muted">investimento · { currency }</p>
 			<div class="mt-4">
-				<p class="text-sm text-muted">Cash balance</p>
+				<p class="text-sm text-muted">Saldo em caixa</p>
 				<p class="text-3xl font-bold">{ cashBalance }</p>
 			</div>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
-			<h2 class="mt-6 text-sm font-semibold text-muted">Holdings</h2>
+			<h2 class="mt-6 text-sm font-semibold text-muted">Posições</h2>
 			if oversold {
-				<p class="mt-2 text-loss">A sell exceeds the quantity held — delete or fix the offending trade below so holdings can be derived.</p>
+				<p class="mt-2 text-loss">Uma venda excede a quantidade mantida — exclua ou corrija a operação abaixo para que as posições possam ser calculadas.</p>
 			} else {
 				<table class="mt-2 w-full text-sm">
 					<thead>
 						<tr class="text-left text-muted">
-							<th class="py-1">Security</th>
-							<th class="text-right">Quantity</th>
-							<th class="text-right">Avg cost</th>
-							<th class="text-right">Cost basis</th>
-							<th class="text-right">Price</th>
-							<th class="text-right">Market value</th>
-							<th class="text-right">Unrealized G/L</th>
-							<th class="text-right">Realized G/L</th>
+							<th class="py-1">Ativo</th>
+							<th class="text-right">Quantidade</th>
+							<th class="text-right">Custo médio</th>
+							<th class="text-right">Custo de aquisição</th>
+							<th class="text-right">Preço</th>
+							<th class="text-right">Valor de mercado</th>
+							<th class="text-right">Ganho/Perda não realizado(a)</th>
+							<th class="text-right">Ganho/Perda realizado(a)</th>
 						</tr>
 					</thead>
 					<tbody>
 						if len(holdings) == 0 {
-							<tr><td colspan="8" class="py-2 text-muted">No open positions.</td></tr>
+							<tr><td colspan="8" class="py-2 text-muted">Nenhuma posição em aberto.</td></tr>
 						}
 						for _, h := range holdings {
 							<tr class="border-t border-black/5">
@@ -761,7 +761,7 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 								<td class="text-right">{ h.AvgCost }</td>
 								<td class="text-right">{ h.CostBasis }</td>
 								if h.HasPrice {
-									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">as of { h.PriceDate }</span></td>
+									<td class="text-right">{ h.Price } <span class="block text-xs text-muted">em { h.PriceDate }</span></td>
 									<td class="text-right">{ h.MarketValue }</td>
 									<td class={ "text-right", templ.KV("text-gain", h.UnrealizedPositive), templ.KV("text-loss", h.UnrealizedNegative) }>{ h.UnrealizedGain }</td>
 								} else {
@@ -775,20 +775,20 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 					</tbody>
 				</table>
 				if realizedGain != "" {
-					<p class="mt-2 text-sm text-muted">Cumulative realized gain/loss: <span class="font-semibold">{ realizedGain }</span></p>
+					<p class="mt-2 text-sm text-muted">Ganho/perda realizado(a) acumulado(a): <span class="font-semibold">{ realizedGain }</span></p>
 				}
 			}
 			if len(securities) == 0 {
-				<p class="mt-6 text-sm text-muted">Add a { currency } security under <a href="/securities" class="text-accent hover:underline">Securities</a> to trade here.</p>
+				<p class="mt-6 text-sm text-muted">Adicione um ativo em { currency } em <a href="/securities" class="text-accent hover:underline">Ativos</a> para negociar aqui.</p>
 			} else {
-				<h2 class="mt-6 text-sm font-semibold text-muted">Buy</h2>
-				@tradeForm(acctID, "buy", "Buy", securities)
-				<h2 class="mt-4 text-sm font-semibold text-muted">Sell</h2>
-				@tradeForm(acctID, "sell", "Sell", securities)
-				<h2 class="mt-4 text-sm font-semibold text-muted">Dividend</h2>
+				<h2 class="mt-6 text-sm font-semibold text-muted">Comprar</h2>
+				@tradeForm(acctID, "buy", "Comprar", securities)
+				<h2 class="mt-4 text-sm font-semibold text-muted">Vender</h2>
+				@tradeForm(acctID, "sell", "Vender", securities)
+				<h2 class="mt-4 text-sm font-semibold text-muted">Dividendo</h2>
 				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/dividend") } class="mt-2 flex flex-wrap items-end gap-2">
 					<div>
-						<label class="block text-xs" for="div_security">Security</label>
+						<label class="block text-xs" for="div_security">Ativo</label>
 						<select id="div_security" name="security_id" class="rounded border px-2 py-1">
 							for _, s := range securities {
 								<option value={ accountID(s.ID) }>{ s.Symbol }</option>
@@ -796,36 +796,36 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 						</select>
 					</div>
 					<div>
-						<label class="block text-xs" for="div_amount">Amount ({ currency })</label>
+						<label class="block text-xs" for="div_amount">Valor ({ currency })</label>
 						<input id="div_amount" name="amount" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="div_date">Date</label>
+						<label class="block text-xs" for="div_date">Data</label>
 						<input id="div_date" name="date" type="date" required class="rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="div_desc">Description</label>
+						<label class="block text-xs" for="div_desc">Descrição</label>
 						<input id="div_desc" name="description" class="w-48 rounded border px-2 py-1"/>
 					</div>
-					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Record dividend</button>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Registrar dividendo</button>
 				</form>
 			}
-			<h2 class="mt-6 text-sm font-semibold text-muted">Transactions</h2>
+			<h2 class="mt-6 text-sm font-semibold text-muted">Transações</h2>
 			<table class="mt-2 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Date</th>
-						<th>Type</th>
-						<th>Security</th>
-						<th class="text-right">Qty</th>
-						<th class="text-right">Price</th>
-						<th class="text-right">Cash</th>
-						<th class="text-right">Actions</th>
+						<th class="py-1">Data</th>
+						<th>Tipo</th>
+						<th>Ativo</th>
+						<th class="text-right">Qtd.</th>
+						<th class="text-right">Preço</th>
+						<th class="text-right">Caixa</th>
+						<th class="text-right">Ações</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(txns) == 0 {
-						<tr><td colspan="7" class="py-2 text-muted">No transactions yet.</td></tr>
+						<tr><td colspan="7" class="py-2 text-muted">Nenhuma transação ainda.</td></tr>
 					}
 					for _, tr := range txns {
 						<tr class="border-t border-black/5">
@@ -838,7 +838,7 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 							<td>
 								<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/delete") } class="flex justify-end">
 									<input type="hidden" name="tx_id" value={ accountID(tr.ID) }/>
-									<button class="rounded border px-2 py-1" type="submit">Delete</button>
+									<button class="rounded border px-2 py-1" type="submit">Excluir</button>
 								</form>
 							</td>
 						</tr>
@@ -854,7 +854,7 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 templ tradeForm(acctID int64, action, label string, securities []SecurityChoice) {
 	<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/" + action) } class="mt-2 flex flex-wrap items-end gap-2">
 		<div>
-			<label class="block text-xs">Security</label>
+			<label class="block text-xs">Ativo</label>
 			<select name="security_id" class="rounded border px-2 py-1">
 				for _, s := range securities {
 					<option value={ accountID(s.ID) }>{ s.Symbol }</option>
@@ -862,23 +862,23 @@ templ tradeForm(acctID int64, action, label string, securities []SecurityChoice)
 			</select>
 		</div>
 		<div>
-			<label class="block text-xs">Quantity</label>
+			<label class="block text-xs">Quantidade</label>
 			<input name="quantity" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
 		</div>
 		<div>
-			<label class="block text-xs">Price</label>
+			<label class="block text-xs">Preço</label>
 			<input name="price" inputmode="decimal" required class="w-24 rounded border px-2 py-1"/>
 		</div>
 		<div>
-			<label class="block text-xs">Fees</label>
+			<label class="block text-xs">Taxas</label>
 			<input name="fees" inputmode="decimal" placeholder="0" class="w-20 rounded border px-2 py-1"/>
 		</div>
 		<div>
-			<label class="block text-xs">Date</label>
+			<label class="block text-xs">Data</label>
 			<input name="date" type="date" required class="rounded border px-2 py-1"/>
 		</div>
 		<div>
-			<label class="block text-xs">Description</label>
+			<label class="block text-xs">Descrição</label>
 			<input name="description" class="w-40 rounded border px-2 py-1"/>
 		</div>
 		<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">{ label }</button>
@@ -891,37 +891,37 @@ templ tradeForm(acctID int64, action, label string, securities []SecurityChoice)
 templ CategoriesPage(data ShellData, categories []CategoryRow, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Categories</h1>
-			<p class="mt-1 text-sm text-muted">Income- and expense-typed labels for your transactions. An income category attaches only to income, an expense category only to expense.</p>
+			<h1 class="text-2xl font-bold">Categorias</h1>
+			<p class="mt-1 text-sm text-muted">Rótulos de receita e despesa para as suas transações. Uma categoria de receita é vinculada apenas a receitas; uma categoria de despesa, apenas a despesas.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action="/categories" class="mt-4 flex flex-wrap items-end gap-2">
 				<div>
-					<label class="block text-xs" for="name">Name</label>
+					<label class="block text-xs" for="name">Nome</label>
 					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="kind">Kind</label>
+					<label class="block text-xs" for="kind">Tipo</label>
 					<select id="kind" name="kind" class="rounded border px-2 py-1">
-						<option value="expense">expense</option>
-						<option value="income">income</option>
+						<option value="expense">despesa</option>
+						<option value="income">receita</option>
 					</select>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Create category</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Criar categoria</button>
 			</form>
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Name</th>
-						<th>Kind</th>
-						<th>In use</th>
-						<th class="text-right">Actions</th>
+						<th class="py-1">Nome</th>
+						<th>Tipo</th>
+						<th>Em uso</th>
+						<th class="text-right">Ações</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(categories) == 0 {
-						<tr><td colspan="4" class="py-2 text-muted">No categories yet.</td></tr>
+						<tr><td colspan="4" class="py-2 text-muted">Nenhuma categoria ainda.</td></tr>
 					}
 					for _, c := range categories {
 						<tr class="border-t border-black/5">
@@ -932,13 +932,13 @@ templ CategoriesPage(data ShellData, categories []CategoryRow, errMsg string) {
 								<div class="flex items-center justify-end gap-2">
 									<form method="post" action="/categories/delete">
 										<input type="hidden" name="id" value={ accountID(c.ID) }/>
-										<button class="rounded border px-2 py-1" type="submit">Delete</button>
+										<button class="rounded border px-2 py-1" type="submit">Excluir</button>
 									</form>
 									if c.Count > 0 {
 										<form method="post" action="/categories/delete">
 											<input type="hidden" name="id" value={ accountID(c.ID) }/>
 											<input type="hidden" name="force" value="true"/>
-											<button class="rounded border border-loss px-2 py-1 text-loss" type="submit">Delete &amp; unassign</button>
+											<button class="rounded border border-loss px-2 py-1 text-loss" type="submit">Excluir e desvincular</button>
 										</form>
 									}
 								</div>
@@ -956,11 +956,11 @@ templ CategoriesPage(data ShellData, categories []CategoryRow, errMsg string) {
 templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRow, totals []string) {
 	@Shell(data) {
 		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
-			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categories</a></p>
+			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categorias</a></p>
 			<h1 class="mt-1 text-2xl font-bold">{ name }</h1>
 			<p class="text-sm text-muted">{ kind }</p>
 			<div class="mt-4">
-				<p class="text-sm text-muted">Totals</p>
+				<p class="text-sm text-muted">Totais</p>
 				if len(totals) == 0 {
 					<p class="text-muted">—</p>
 				}
@@ -971,15 +971,15 @@ templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRo
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Date</th>
-						<th>Account</th>
-						<th>Description</th>
-						<th class="text-right">Amount</th>
+						<th class="py-1">Data</th>
+						<th>Conta</th>
+						<th>Descrição</th>
+						<th class="text-right">Valor</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(txns) == 0 {
-						<tr><td colspan="4" class="py-2 text-muted">No transactions in this category.</td></tr>
+						<tr><td colspan="4" class="py-2 text-muted">Nenhuma transação nesta categoria.</td></tr>
 					}
 					for _, tr := range txns {
 						<tr class="border-t border-black/5">
@@ -1002,22 +1002,22 @@ templ CategorySummaryPage(data ShellData, name, kind string, txns []CategoryTxRo
 templ SecuritiesPage(data ShellData, securities []SecurityRow, types []SecurityTypeOption, currencies []string, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Securities</h1>
-			<p class="mt-1 text-sm text-muted">The instruments you trade. Each has a symbol, a name, a type, and the currency it is quoted in. You can record buys, sells, and dividends against them in later steps.</p>
+			<h1 class="text-2xl font-bold">Ativos</h1>
+			<p class="mt-1 text-sm text-muted">Os instrumentos que você negocia. Cada um tem um código, um nome, um tipo e a moeda em que é cotado. Você pode registrar compras, vendas e dividendos em etapas posteriores.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action="/securities" class="mt-4 flex flex-wrap items-end gap-2">
 				<div>
-					<label class="block text-xs" for="symbol">Symbol</label>
+					<label class="block text-xs" for="symbol">Código</label>
 					<input id="symbol" name="symbol" required class="w-32 rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="name">Name</label>
+					<label class="block text-xs" for="name">Nome</label>
 					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="type">Type</label>
+					<label class="block text-xs" for="type">Tipo</label>
 					<select id="type" name="type" class="rounded border px-2 py-1">
 						for _, t := range types {
 							<option value={ t.Value }>{ t.Label }</option>
@@ -1025,27 +1025,27 @@ templ SecuritiesPage(data ShellData, securities []SecurityRow, types []SecurityT
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="quote_currency">Quote currency</label>
+					<label class="block text-xs" for="quote_currency">Moeda de cotação</label>
 					<select id="quote_currency" name="quote_currency" class="rounded border px-2 py-1">
 						for _, c := range currencies {
 							<option value={ c }>{ c }</option>
 						}
 					</select>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Add security</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar ativo</button>
 			</form>
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Symbol</th>
-						<th>Name</th>
-						<th>Type</th>
-						<th class="text-right">Quote currency</th>
+						<th class="py-1">Código</th>
+						<th>Nome</th>
+						<th>Tipo</th>
+						<th class="text-right">Moeda de cotação</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(securities) == 0 {
-						<tr><td colspan="4" class="py-2 text-muted">No securities yet.</td></tr>
+						<tr><td colspan="4" class="py-2 text-muted">Nenhum ativo ainda.</td></tr>
 					}
 					for _, s := range securities {
 						<tr class="border-t border-black/5">
@@ -1068,31 +1068,31 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-accent hover:underline">← { accountName }</a></p>
-			<h1 class="mt-1 text-2xl font-bold">Import transactions</h1>
-			<p class="mt-1 text-sm text-muted">Tab-delimited <code>date⇥description⇥value</code>, one per line. Dates <code>dd/mm/yy</code> or <code>dd/mm/yyyy</code>; values in Brazilian format (e.g. <code>1.234,56</code>). A negative value is an expense, positive an income, in { currency }. Re-importing the same file adds nothing new.</p>
+			<h1 class="mt-1 text-2xl font-bold">Importar transações</h1>
+			<p class="mt-1 text-sm text-muted">Formato separado por tabulação: <code>data⇥descrição⇥valor</code>, uma por linha. Datas <code>dd/mm/aa</code> ou <code>dd/mm/aaaa</code>; valores no formato brasileiro (p.ex. <code>1.234,56</code>). Valor negativo é despesa, positivo é receita, em { currency }. Reimportar o mesmo arquivo não adiciona nada novo.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/preview") } enctype="multipart/form-data" class="mt-4 space-y-3">
 				<div>
-					<label class="block text-xs" for="file">File</label>
+					<label class="block text-xs" for="file">Arquivo</label>
 					<input id="file" name="file" type="file" class="text-sm"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="content">…or paste rows</label>
+					<label class="block text-xs" for="content">…ou cole as linhas</label>
 					<textarea id="content" name="content" rows="5" class="w-full rounded border px-2 py-1 font-mono text-xs">{ content }</textarea>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Preview</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Visualizar</button>
 			</form>
 			if hasResult {
 				<table class="mt-6 w-full text-sm">
 					<thead>
 						<tr class="text-left text-muted">
-							<th class="py-1">Line</th>
-							<th>Date</th>
-							<th>Description</th>
-							<th>Type</th>
-							<th class="text-right">Amount</th>
+							<th class="py-1">Linha</th>
+							<th>Data</th>
+							<th>Descrição</th>
+							<th>Tipo</th>
+							<th class="text-right">Valor</th>
 							<th>Status</th>
 						</tr>
 					</thead>
@@ -1103,7 +1103,7 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 								if r.Status == "error" {
 									<td colspan="3" class="text-loss">{ r.Raw }</td>
 									<td></td>
-									<td class="text-loss">error: { r.Reason }</td>
+									<td class="text-loss">erro: { r.Reason }</td>
 								} else {
 									<td>{ r.Date }</td>
 									<td>{ r.Description }</td>
@@ -1111,9 +1111,9 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 									<td class={ "text-right", templ.KV("text-gain", r.Type == "income"), templ.KV("text-loss", r.Type == "expense") }>{ r.Amount }</td>
 									<td>
 										if r.Status == "duplicate" {
-											<span class="text-muted">duplicate</span>
+											<span class="text-muted">duplicado</span>
 										} else {
-											<span class="text-gain">new</span>
+											<span class="text-gain">novo</span>
 										}
 									</td>
 								}
@@ -1124,10 +1124,10 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 				if newCount > 0 {
 					<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/commit") } class="mt-4">
 						<input type="hidden" name="content" value={ content }/>
-						<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Commit { countLabel(int64(newCount)) } new rows</button>
+						<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Confirmar { countLabel(int64(newCount)) } novas linhas</button>
 					</form>
 				} else {
-					<p class="mt-4 text-sm text-muted">No new rows to import.</p>
+					<p class="mt-4 text-sm text-muted">Nenhuma linha nova para importar.</p>
 				}
 			}
 		</section>
@@ -1141,8 +1141,8 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 templ TransactionsPage(data ShellData, accounts []FilterOption, categories []FilterOption, selAccount int64, selType string, selCategory int64, rows []RegisterRow) {
 	@Shell(data) {
 		<section class="rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Transactions</h1>
-			<p class="mt-1 text-sm text-muted">Every account, newest first. Filter to narrow the list.</p>
+			<h1 class="text-2xl font-bold">Transações</h1>
+			<p class="mt-1 text-sm text-muted">Todas as contas, da mais recente para a mais antiga. Filtre para restringir a lista.</p>
 			<form
 				method="get"
 				action="/transactions"
@@ -1153,42 +1153,42 @@ templ TransactionsPage(data ShellData, accounts []FilterOption, categories []Fil
 				class="mt-4 flex flex-wrap items-end gap-2"
 			>
 				<div>
-					<label class="block text-xs" for="account">Account</label>
+					<label class="block text-xs" for="account">Conta</label>
 					<select id="account" name="account" class="rounded border px-2 py-1">
-						<option value="" selected?={ selAccount == 0 }>All accounts</option>
+						<option value="" selected?={ selAccount == 0 }>Todas as contas</option>
 						for _, a := range accounts {
 							<option value={ accountID(a.ID) } selected?={ a.ID == selAccount }>{ a.Label }</option>
 						}
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="type">Type</label>
+					<label class="block text-xs" for="type">Tipo</label>
 					<select id="type" name="type" class="rounded border px-2 py-1">
-						<option value="" selected?={ selType == "" }>All types</option>
-						<option value="income" selected?={ selType == "income" }>income</option>
-						<option value="expense" selected?={ selType == "expense" }>expense</option>
-						<option value="transfer" selected?={ selType == "transfer" }>transfer</option>
+						<option value="" selected?={ selType == "" }>Todos os tipos</option>
+						<option value="income" selected?={ selType == "income" }>receita</option>
+						<option value="expense" selected?={ selType == "expense" }>despesa</option>
+						<option value="transfer" selected?={ selType == "transfer" }>transferência</option>
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="category">Category</label>
+					<label class="block text-xs" for="category">Categoria</label>
 					<select id="category" name="category" class="rounded border px-2 py-1">
-						<option value="" selected?={ selCategory == 0 }>All categories</option>
+						<option value="" selected?={ selCategory == 0 }>Todas as categorias</option>
 						for _, c := range categories {
 							<option value={ accountID(c.ID) } selected?={ c.ID == selCategory }>{ c.Label }</option>
 						}
 					</select>
 				</div>
-				<noscript><button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Filter</button></noscript>
+				<noscript><button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Filtrar</button></noscript>
 			</form>
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Date</th>
-						<th>Type</th>
-						<th>Account</th>
-						<th>Description</th>
-						<th class="text-right">Amount</th>
+						<th class="py-1">Data</th>
+						<th>Tipo</th>
+						<th>Conta</th>
+						<th>Descrição</th>
+						<th class="text-right">Valor</th>
 					</tr>
 				</thead>
 				<tbody id="tx-rows">
@@ -1203,7 +1203,7 @@ templ TransactionsPage(data ShellData, accounts []FilterOption, categories []Fil
 // for HTMX filter swaps and embedded inside TransactionsPage's #tx-rows.
 templ TransactionRows(rows []RegisterRow) {
 	if len(rows) == 0 {
-		<tr><td colspan="5" class="py-2 text-muted">No transactions match.</td></tr>
+		<tr><td colspan="5" class="py-2 text-muted">Nenhuma transação encontrada.</td></tr>
 	}
 	for _, r := range rows {
 		<tr class="border-t border-black/5">
@@ -1226,14 +1226,14 @@ templ TransactionRows(rows []RegisterRow) {
 templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Exchange rates</h1>
-			<p class="mt-1 text-sm text-muted">Owner-entered, effective-dated, directional (from → to). Rates are never inverted — enter each direction you need.</p>
+			<h1 class="text-2xl font-bold">Taxas de câmbio</h1>
+			<p class="mt-1 text-sm text-muted">Inseridas pelo usuário, com data de vigência, direcionais (de → para). As taxas nunca são invertidas — insira cada direção necessária.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action="/exchange-rates" class="mt-4 flex flex-wrap items-end gap-2">
 				<div>
-					<label class="block text-xs" for="from">From</label>
+					<label class="block text-xs" for="from">De</label>
 					<select id="from" name="from" class="rounded border px-2 py-1">
 						for _, c := range currencies {
 							<option value={ c }>{ c }</option>
@@ -1241,7 +1241,7 @@ templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, er
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="to">To</label>
+					<label class="block text-xs" for="to">Para</label>
 					<select id="to" name="to" class="rounded border px-2 py-1">
 						for _, c := range currencies {
 							<option value={ c }>{ c }</option>
@@ -1249,27 +1249,27 @@ templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, er
 					</select>
 				</div>
 				<div>
-					<label class="block text-xs" for="effective_date">Effective date</label>
+					<label class="block text-xs" for="effective_date">Data de vigência</label>
 					<input id="effective_date" name="effective_date" type="date" required class="rounded border px-2 py-1"/>
 				</div>
 				<div>
-					<label class="block text-xs" for="rate">Rate</label>
+					<label class="block text-xs" for="rate">Taxa</label>
 					<input id="rate" name="rate" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Add</button>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar</button>
 			</form>
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">From</th>
-						<th>To</th>
-						<th>Effective</th>
-						<th class="text-right">Rate</th>
+						<th class="py-1">De</th>
+						<th>Para</th>
+						<th>Vigência</th>
+						<th class="text-right">Taxa</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(rates) == 0 {
-						<tr><td colspan="4" class="py-2 text-muted">No rates yet.</td></tr>
+						<tr><td colspan="4" class="py-2 text-muted">Nenhuma taxa ainda.</td></tr>
 					}
 					for _, r := range rates {
 						<tr class="border-t border-black/5">
@@ -1291,17 +1291,17 @@ templ ExchangeRatesPage(data ShellData, rates []RateRow, currencies []string, er
 templ PricesPage(data ShellData, prices []PriceRow, securities []SecurityChoice, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
-			<h1 class="text-2xl font-bold">Security prices</h1>
-			<p class="mt-1 text-sm text-muted">Owner-entered, effective-dated, append-only. The most recent price on or before today values your holdings. There is no online or automated price feed — enter prices yourself.</p>
+			<h1 class="text-2xl font-bold">Preços dos ativos</h1>
+			<p class="mt-1 text-sm text-muted">Inseridos pelo usuário, com data de vigência, apenas acréscimo. O preço mais recente até hoje é usado para valorizar as posições. Não há feed automático de preços — insira os preços manualmente.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			if len(securities) == 0 {
-				<p class="mt-4 text-sm text-muted">Add a security under <a href="/securities" class="text-accent hover:underline">Securities</a> before entering prices.</p>
+				<p class="mt-4 text-sm text-muted">Adicione um ativo em <a href="/securities" class="text-accent hover:underline">Ativos</a> antes de inserir preços.</p>
 			} else {
 				<form method="post" action="/prices" class="mt-4 flex flex-wrap items-end gap-2">
 					<div>
-						<label class="block text-xs" for="security_id">Security</label>
+						<label class="block text-xs" for="security_id">Ativo</label>
 						<select id="security_id" name="security_id" class="rounded border px-2 py-1">
 							for _, s := range securities {
 								<option value={ accountID(s.ID) }>{ s.Symbol }</option>
@@ -1309,27 +1309,27 @@ templ PricesPage(data ShellData, prices []PriceRow, securities []SecurityChoice,
 						</select>
 					</div>
 					<div>
-						<label class="block text-xs" for="effective_date">Effective date</label>
+						<label class="block text-xs" for="effective_date">Data de vigência</label>
 						<input id="effective_date" name="effective_date" type="date" required class="rounded border px-2 py-1"/>
 					</div>
 					<div>
-						<label class="block text-xs" for="price">Price</label>
+						<label class="block text-xs" for="price">Preço</label>
 						<input id="price" name="price" inputmode="decimal" required class="w-28 rounded border px-2 py-1"/>
 					</div>
-					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Add</button>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar</button>
 				</form>
 			}
 			<table class="mt-6 w-full text-sm">
 				<thead>
 					<tr class="text-left text-muted">
-						<th class="py-1">Security</th>
-						<th>Effective</th>
-						<th class="text-right">Price</th>
+						<th class="py-1">Ativo</th>
+						<th>Vigência</th>
+						<th class="text-right">Preço</th>
 					</tr>
 				</thead>
 				<tbody>
 					if len(prices) == 0 {
-						<tr><td colspan="3" class="py-2 text-muted">No prices yet.</td></tr>
+						<tr><td colspan="3" class="py-2 text-muted">Nenhum preço ainda.</td></tr>
 					}
 					for _, p := range prices {
 						<tr class="border-t border-black/5">

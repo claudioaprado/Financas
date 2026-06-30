@@ -239,7 +239,8 @@ type AccountRow struct {
 type TxRow struct {
 	ID           int64
 	Type         string // "income" | "expense" | "transfer"
-	Date         string // YYYY-MM-DD
+	Date         string // display date, dd/mm/aaaa (shown in tables)
+	EditDate     string // ISO YYYY-MM-DD, for the edit form <input type=date> (must round-trip through the parser)
 	Description  string
 	Counterparty string // other account name (transfers only)
 	Category     string // assigned category name (income/expense only)
@@ -423,9 +424,9 @@ type NavItem struct {
 // NavItems is the ordered top navigation (UX-DR1). Targets beyond Dashboard are
 // built in later epics; Story 1.4 ships navigable placeholders.
 var NavItems = []NavItem{
-	{Label: "Dashboard", Href: "/", Key: "dashboard"},
-	{Label: "Investments", Href: "/investments", Key: "investments"},
-	{Label: "Transactions", Href: "/transactions", Key: "transactions"},
-	{Label: "Accounts", Href: "/accounts", Key: "accounts"},
-	{Label: "Analytics", Href: "/analytics", Key: "analytics"},
+	{Label: "Painel", Href: "/", Key: "dashboard"},
+	{Label: "Investimentos", Href: "/investments", Key: "investments"},
+	{Label: "Transações", Href: "/transactions", Key: "transactions"},
+	{Label: "Contas", Href: "/accounts", Key: "accounts"},
+	{Label: "Análises", Href: "/analytics", Key: "analytics"},
 }

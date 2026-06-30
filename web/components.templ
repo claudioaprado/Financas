@@ -30,10 +30,10 @@ templ Badge(label string, variant BadgeVariant) {
 templ Amount(m MoneyText, size AmountSize) {
 	<span class={ amountClass(size), "tabular-nums", templ.KV("text-gain", m.Positive), templ.KV("text-loss", m.Negative) }>
 		if m.Positive {
-			<span aria-hidden="true">+</span><span class="sr-only">gain </span>
+			<span aria-hidden="true">+</span><span class="sr-only">ganho </span>
 		}
 		if m.Negative {
-			<span aria-hidden="true">−</span><span class="sr-only">loss </span>
+			<span aria-hidden="true">−</span><span class="sr-only">perda </span>
 		}
 		{ m.Display }
 	</span>

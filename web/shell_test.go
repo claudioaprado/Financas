@@ -20,8 +20,8 @@ func renderToString(t *testing.T, c templ.Component) string {
 func TestDashboardPageRendersShell(t *testing.T) {
 	html := renderToString(t, DashboardPage(ShellData{OwnerName: "Ada", Active: "dashboard"}, DashboardView{}))
 	for _, want := range []string{
-		"Welcome back", "Ada",
-		"Dashboard", "Investments", "Transactions", "Accounts", "Analytics",
+		"Bem-vindo(a) de volta", "Ada",
+		"Painel", "Investimentos", "Transações", "Contas", "Análises",
 		`href="/investments"`, `action="/logout"`,
 	} {
 		if !strings.Contains(html, want) {
@@ -49,12 +49,12 @@ func TestAllocationCardRendersDonutAndLegend(t *testing.T) {
 	}
 	html := renderToString(t, allocationCard(view))
 	for _, want := range []string{
-		"Allocation", "(", "BRL", "Portfolio allocation", "<svg",
+		"Alocação", "(", "BRL", "Alocação da carteira", "<svg",
 		"stroke-dasharray", "351.858 87.965", "stroke-alloc-1", "bg-alloc-1",
 		"AAPL", "80%", "4000.0000 BRL", "PETR4", "20%", "1000.0000 BRL",
 		"Total", "5000.0000 BRL",
 		"Security", "Account", `aria-current="true"`,
-		"Allocation excludes", "USD", "/exchange-rates",
+		"A alocação exclui", "USD", "/exchange-rates",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("allocation card missing %q", want)
@@ -74,19 +74,19 @@ func TestAllocationCardEmptyState(t *testing.T) {
 
 func TestInsightCalloutRendersSentenceAndDirection(t *testing.T) {
 	up := renderToString(t, insightCallout(InsightView{
-		HasData: true, Text: "Your net worth is up 4.0% this month",
-		NetWorth: "5200.0000 BRL", Up: true, Partial: true,
+		HasData: true, Text: "Seu patrimônio subiu 4,0% neste mês",
+		NetWorth: "5.200,00 BRL", Up: true, Partial: true,
 	}))
 	for _, want := range []string{
-		"Your net worth is up 4.0% this month", "▲", "up",
-		"text-accent", "bg-accent", "Net worth 5200.0000 BRL", "Partial",
+		"Seu patrimônio subiu 4,0% neste mês", "▲", "subiu",
+		"text-accent", "bg-accent", "Patrimônio líquido 5.200,00 BRL", "Parcial",
 	} {
 		if !strings.Contains(up, want) {
 			t.Errorf("insight call-out missing %q", want)
 		}
 	}
-	down := renderToString(t, insightCallout(InsightView{HasData: true, Text: "Your net worth is down 1.5% this month", NetWorth: "100.0000 BRL", Down: true}))
-	if !strings.Contains(down, "▼") || !strings.Contains(down, "down") {
+	down := renderToString(t, insightCallout(InsightView{HasData: true, Text: "Seu patrimônio caiu 1,5% neste mês", NetWorth: "100,00 BRL", Down: true}))
+	if !strings.Contains(down, "▼") || !strings.Contains(down, "caiu") {
 		t.Errorf("down insight should render ▼ + sr-only down")
 	}
 	empty := renderToString(t, insightCallout(InsightView{Empty: "Add transactions and prices over the month."}))
@@ -103,7 +103,7 @@ func TestRecentTransactionsRendersRowsAndLink(t *testing.T) {
 	}
 	html := renderToString(t, recentTransactions(rows))
 	for _, want := range []string{
-		"Recent activity", "View all", `href="/transactions"`,
+		"Atividade recente", "Ver todos", `href="/transactions"`,
 		"Salary", "+5000.0000 BRL", "text-gain",
 		"Groceries", "Food", "-120.5000 BRL", "text-loss",
 		"Move", // transfer row (neutral — no gain/loss class forced)
@@ -113,7 +113,7 @@ func TestRecentTransactionsRendersRowsAndLink(t *testing.T) {
 		}
 	}
 	empty := renderToString(t, recentTransactions(nil))
-	if !strings.Contains(empty, "No transactions yet") {
+	if !strings.Contains(empty, "Nenhuma transação ainda") {
 		t.Errorf("empty recent transactions should render the empty copy")
 	}
 }
@@ -121,12 +121,12 @@ func TestRecentTransactionsRendersRowsAndLink(t *testing.T) {
 func TestDashboardPageRendersKPICards(t *testing.T) {
 	view := DashboardView{
 		Cards: []KPICardView{
-			{Label: "Net worth", Icon: "networth",
+			{Label: "Patrimônio líquido", Icon: "networth",
 				Amount: MoneyText{Display: "1234.5000 BRL"},
-				Delta:  DeltaText{Display: "2.0%", Up: true}},
-			{Label: "Total gain/loss", Icon: "gainloss",
+				Delta:  DeltaText{Display: "2,0%", Up: true}},
+			{Label: "Ganho/perda total", Icon: "gainloss",
 				Amount: MoneyText{Display: "100.0000 BRL", Positive: true},
-				Delta:  DeltaText{Display: "1.1%", Down: true}},
+				Delta:  DeltaText{Display: "1,1%", Down: true}},
 			{Label: "Cash", Icon: "cash",
 				Amount: MoneyText{Display: "434.5000 BRL"},
 				Delta:  DeltaText{None: true}},
@@ -135,7 +135,7 @@ func TestDashboardPageRendersKPICards(t *testing.T) {
 	html := renderToString(t, DashboardPage(ShellData{OwnerName: "Ada", Active: "dashboard"}, view))
 
 	// Labels + figures.
-	for _, want := range []string{"Net worth", "1234.5000 BRL", "Total gain/loss", "100.0000 BRL", "Cash", "434.5000 BRL"} {
+	for _, want := range []string{"Patrimônio líquido", "1234.5000 BRL", "Ganho/perda total", "100.0000 BRL", "Cash", "434.5000 BRL"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("KPI card missing %q", want)
 		}
@@ -145,7 +145,7 @@ func TestDashboardPageRendersKPICards(t *testing.T) {
 		t.Error("gain figure should show a sign and gain colour")
 	}
 	// Up delta: ▲ with sr-only "up" and gain colour; down delta: ▼ with loss colour.
-	for _, want := range []string{"▲", "up", "2.0%", "▼", "down", "1.1%", "text-loss"} {
+	for _, want := range []string{"▲", "subiu", "2,0%", "▼", "caiu", "1,1%", "text-loss"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("delta rendering missing %q", want)
 		}
@@ -178,11 +178,11 @@ func TestDashboardPageRendersTrendChart(t *testing.T) {
 	}
 	html := renderToString(t, DashboardPage(ShellData{Active: "dashboard"}, view))
 	for _, want := range []string{
-		"Net worth over time", "BRL",
+		"Patrimônio ao longo do tempo", "BRL",
 		"<svg", "<polyline", "24,250 500,120 976,24",
 		"5000.0000 BRL", "5300.0000 BRL", "2026-06-01", "2026-06-20",
 		"<title>2026-06-01: 5000.0000 BRL</title>",
-		`href="/?range=1m"`, "Some points are partial",
+		`href="/?range=1m"`, "Alguns pontos são parciais",
 		`aria-current="true">1Y`,
 	} {
 		if !strings.Contains(html, want) {
@@ -207,17 +207,17 @@ func TestDashboardPageErrorBanner(t *testing.T) {
 	if !strings.Contains(html, "boom") || !strings.Contains(html, "text-loss") {
 		t.Error("error banner should render the message with loss styling")
 	}
-	if strings.Contains(html, "Net worth") {
+	if strings.Contains(html, "Patrimônio líquido") {
 		t.Error("error banner should replace the KPI row, not render cards")
 	}
 }
 
 func TestActiveNavMarked(t *testing.T) {
-	html := renderToString(t, ComingSoon(ShellData{OwnerName: "Ada", Active: "accounts"}, "Accounts"))
+	html := renderToString(t, ComingSoon(ShellData{OwnerName: "Ada", Active: "accounts"}, "Contas"))
 	if !strings.Contains(html, `aria-current="page"`) {
 		t.Error("active nav section should set aria-current=page")
 	}
-	if !strings.Contains(html, "Coming soon") {
+	if !strings.Contains(html, "Em breve") {
 		t.Error("ComingSoon body missing")
 	}
 }

@@ -33,7 +33,7 @@ func Shell(data ShellData) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Financas</title><link rel=\"stylesheet\" href=\"/static/css/app.css\"></head><body class=\"min-h-screen bg-surface text-ink\"><header class=\"border-b border-black/5 bg-white\"><div class=\"relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3\"><div><p class=\"text-sm text-muted\">Welcome back,</p><p class=\"text-lg font-bold\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Financas</title><link rel=\"stylesheet\" href=\"/static/css/app.css\"></head><body class=\"min-h-screen bg-surface text-ink\"><header class=\"border-b border-black/5 bg-white\"><div class=\"relative mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3\"><div><p class=\"text-sm text-muted\">Bem-vindo(a) de volta,</p><p class=\"text-lg font-bold\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -59,14 +59,14 @@ func Shell(data ShellData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if data.DisplayCurrency != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<span class=\"rounded-card bg-surface px-2 py-1 text-xs font-medium text-muted\" title=\"Display currency\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<span class=\"rounded-card bg-surface px-2 py-1 text-xs font-medium text-muted\" title=\"Moeda de exibição\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(data.DisplayCurrency)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/shell.templ`, Line: 26, Col: 133}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `web/shell.templ`, Line: 26, Col: 136}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -77,7 +77,7 @@ func Shell(data ShellData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<a href=\"/settings\" class=\"text-sm text-muted hover:text-ink\">Settings</a><form method=\"post\" action=\"/logout\"><button class=\"rounded-card px-3 py-1.5 text-sm text-muted hover:text-ink\" type=\"submit\">Log out</button></form></div></div></header><main class=\"mx-auto max-w-6xl px-4 py-6\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<a href=\"/settings\" class=\"text-sm text-muted hover:text-ink\">Configurações</a><form method=\"post\" action=\"/logout\"><button class=\"rounded-card px-3 py-1.5 text-sm text-muted hover:text-ink\" type=\"submit\">Sair</button></form></div></div></header><main class=\"mx-auto max-w-6xl px-4 py-6\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -116,7 +116,7 @@ func navMenu(active string) templ.Component {
 			templ_7745c5c3_Var4 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<nav class=\"hidden gap-1 md:flex\" aria-label=\"Primary\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<nav class=\"hidden gap-1 md:flex\" aria-label=\"Principal\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -126,7 +126,7 @@ func navMenu(active string) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</nav><details class=\"md:hidden\"><summary class=\"cursor-pointer rounded-card px-3 py-1.5 text-sm font-medium text-muted\">Menu</summary><nav class=\"absolute right-4 top-full z-10 mt-1 flex w-48 flex-col gap-1 rounded-card bg-white p-2 shadow-card\" aria-label=\"Primary\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</nav><details class=\"md:hidden\"><summary class=\"cursor-pointer rounded-card px-3 py-1.5 text-sm font-medium text-muted\">Menu</summary><nav class=\"absolute right-4 top-full z-10 mt-1 flex w-48 flex-col gap-1 rounded-card bg-white p-2 shadow-card\" aria-label=\"Principal\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

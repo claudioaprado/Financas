@@ -4,11 +4,11 @@ package web
 // non-empty. Story 1.4 restyles this inside the real app shell.
 templ Login(errorMsg string) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang="pt-BR">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>Sign in · Financas</title>
+			<title>Entrar · Financas</title>
 			<link rel="stylesheet" href="/static/css/app.css"/>
 		</head>
 		<body class="bg-slate-50 text-slate-900">
@@ -19,14 +19,14 @@ templ Login(errorMsg string) {
 				}
 				<form method="post" action="/login" class="space-y-3">
 					<div>
-						<label class="block text-sm" for="username">Username</label>
+						<label class="block text-sm" for="username">Usuário</label>
 						<input class="border rounded px-2 py-1 w-full" id="username" name="username" autocomplete="username" required/>
 					</div>
 					<div>
-						<label class="block text-sm" for="password">Password</label>
+						<label class="block text-sm" for="password">Senha</label>
 						<input class="border rounded px-2 py-1 w-full" id="password" name="password" type="password" autocomplete="current-password" required/>
 					</div>
-					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Sign in</button>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Entrar</button>
 				</form>
 			</main>
 		</body>

@@ -184,13 +184,13 @@ func Amount(m MoneyText, size AmountSize) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if m.Positive {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<span aria-hidden=\"true\">+</span><span class=\"sr-only\">gain </span> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<span aria-hidden=\"true\">+</span><span class=\"sr-only\">ganho </span> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
 		if m.Negative {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<span aria-hidden=\"true\">−</span><span class=\"sr-only\">loss </span> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<span aria-hidden=\"true\">−</span><span class=\"sr-only\">perda </span> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

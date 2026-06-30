@@ -225,7 +225,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
-		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Analytics") }))
+		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Análises") }))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
 		pr.Get("/export", exportData(deps))
@@ -248,7 +248,7 @@ func exchangeRatesForm(deps Deps) http.HandlerFunc {
 func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		from := money.Currency(req.PostFormValue("from"))
@@ -256,11 +256,11 @@ func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
 		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
 		rate, rErr := decimal.NewFromString(req.PostFormValue("rate"))
 		if dErr != nil || rErr != nil {
-			renderExchangeRates(deps, w, req, "Enter a valid date and a decimal rate.", http.StatusBadRequest)
+			renderExchangeRates(deps, w, req, "Informe uma data válida e uma taxa decimal.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.ExchangeRates.Add(req.Context(), from, to, effective, rate); err != nil {
-			renderExchangeRates(deps, w, req, "Could not add rate: "+err.Error(), http.StatusBadRequest)
+			renderExchangeRates(deps, w, req, "Não foi possível adicionar a taxa: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/exchange-rates", http.StatusSeeOther)
@@ -274,8 +274,8 @@ func renderExchangeRates(deps Deps, w http.ResponseWriter, req *http.Request, er
 			rows = append(rows, web.RateRow{
 				From:          string(r.From),
 				To:            string(r.To),
-				EffectiveDate: r.EffectiveDate.Format("2006-01-02"),
-				Rate:          r.Rate.String(),
+				EffectiveDate: r.EffectiveDate.Format("02/01/2006"),
+				Rate:          money.FormatDecimal(r.Rate),
 			})
 		}
 	}
@@ -297,18 +297,18 @@ func pricesForm(deps Deps) http.HandlerFunc {
 func pricesSubmit(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		securityID, idErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
 		effective, dErr := time.Parse("2006-01-02", req.PostFormValue("effective_date"))
 		price, pErr := decimal.NewFromString(req.PostFormValue("price"))
 		if idErr != nil || dErr != nil || pErr != nil {
-			renderPrices(deps, w, req, "Choose a security and enter a valid date and a decimal price.", http.StatusBadRequest)
+			renderPrices(deps, w, req, "Escolha um ativo e informe uma data válida e um preço decimal.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Prices.Add(req.Context(), securityID, effective, price); err != nil {
-			renderPrices(deps, w, req, "Could not add price: "+err.Error(), http.StatusBadRequest)
+			renderPrices(deps, w, req, "Não foi possível adicionar o preço: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/prices", http.StatusSeeOther)
@@ -321,8 +321,8 @@ func renderPrices(deps Deps, w http.ResponseWriter, req *http.Request, errMsg st
 		for _, p := range ps {
 			rows = append(rows, web.PriceRow{
 				Symbol:        p.Symbol,
-				EffectiveDate: p.EffectiveDate.Format("2006-01-02"),
-				Price:         money.New(p.Price, p.Currency).String(),
+				EffectiveDate: p.EffectiveDate.Format("02/01/2006"),
+				Price:         money.New(p.Price, p.Currency).Display(),
 			})
 		}
 	}
@@ -348,14 +348,14 @@ func accountsForm(deps Deps) http.HandlerFunc {
 func accountsCreate(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		name := req.PostFormValue("name")
 		typ := account.AccountType(req.PostFormValue("type"))
 		currency := money.Currency(req.PostFormValue("currency"))
 		if _, err := deps.Accounts.Create(req.Context(), name, typ, currency); err != nil {
-			renderAccounts(deps, w, req, false, "Could not create account: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, false, "Não foi possível criar a conta: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/accounts", http.StatusSeeOther)
@@ -365,16 +365,16 @@ func accountsCreate(deps Deps) http.HandlerFunc {
 func accountsRename(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
 		if err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Invalid account id.", http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), "ID de conta inválido.", http.StatusBadRequest)
 			return
 		}
 		if err := deps.Accounts.Rename(req.Context(), id, req.PostFormValue("name")); err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Could not rename account: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), "Não foi possível renomear a conta: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
@@ -384,17 +384,17 @@ func accountsRename(deps Deps) http.HandlerFunc {
 func accountsArchive(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
 		if err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Invalid account id.", http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), "ID de conta inválido.", http.StatusBadRequest)
 			return
 		}
 		archived := req.PostFormValue("archived") == "true"
 		if err := deps.Accounts.SetArchived(req.Context(), id, archived); err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Could not update account: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), "Não foi possível atualizar a conta: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
@@ -419,9 +419,9 @@ func accountsRedirect(req *http.Request) string {
 // only (no financial math); the value is derived in later epics (AD-2, AD-10).
 func balanceLabel(t account.AccountType) string {
 	if t == account.Credit {
-		return "Balance owed"
+		return "Saldo devedor"
 	}
-	return "Cash balance"
+	return "Saldo em caixa"
 }
 
 func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, includeArchived bool, errMsg string, code int) {
@@ -469,11 +469,11 @@ func txCreate(deps Deps) http.HandlerFunc {
 		}
 		typ, amount, date, desc, catID, ok := parseTxForm(req)
 		if !ok {
-			renderAccountDetail(deps, w, req, acctID, 0, "Enter a valid amount and date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Informe um valor e uma data válidos.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Transactions.Record(req.Context(), acctID, typ, amount, date, desc, catID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not add transaction: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível adicionar a transação: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -489,16 +489,16 @@ func txEdit(deps Deps) http.HandlerFunc {
 		}
 		txID, err := strconv.ParseInt(req.PostFormValue("tx_id"), 10, 64)
 		if err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Invalid transaction id.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "ID de transação inválido.", http.StatusBadRequest)
 			return
 		}
 		typ, amount, date, desc, catID, ok := parseTxForm(req)
 		if !ok {
-			renderAccountDetail(deps, w, req, acctID, txID, "Enter a valid amount and date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, txID, "Informe um valor e uma data válidos.", http.StatusBadRequest)
 			return
 		}
 		if err := deps.Transactions.Edit(req.Context(), acctID, txID, typ, amount, date, desc, catID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, txID, "Could not save transaction: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, txID, "Não foi possível salvar a transação: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -514,11 +514,11 @@ func txDelete(deps Deps) http.HandlerFunc {
 		}
 		txID, err := strconv.ParseInt(req.PostFormValue("tx_id"), 10, 64)
 		if err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Invalid transaction id.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "ID de transação inválido.", http.StatusBadRequest)
 			return
 		}
 		if err := deps.Transactions.Delete(req.Context(), txID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not delete transaction: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível excluir a transação: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -533,14 +533,14 @@ func txTransfer(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		toID, idErr := strconv.ParseInt(req.PostFormValue("to_account_id"), 10, 64)
 		fromAmount, faErr := decimal.NewFromString(req.PostFormValue("from_amount"))
 		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 		if idErr != nil || faErr != nil || dErr != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Enter a destination, a valid amount, and a date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Informe um destino, um valor válido e uma data.", http.StatusBadRequest)
 			return
 		}
 		// The received amount is optional (blank ⇒ same-currency); a non-empty
@@ -549,13 +549,13 @@ func txTransfer(deps Deps) http.HandlerFunc {
 		if raw := strings.TrimSpace(req.PostFormValue("to_amount")); raw != "" {
 			parsed, err := decimal.NewFromString(raw)
 			if err != nil {
-				renderAccountDetail(deps, w, req, acctID, 0, "Enter a valid received amount.", http.StatusBadRequest)
+				renderAccountDetail(deps, w, req, acctID, 0, "Informe um valor recebido válido.", http.StatusBadRequest)
 				return
 			}
 			toAmount = parsed
 		}
 		if err := deps.Transactions.Transfer(req.Context(), acctID, toID, fromAmount, toAmount, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not transfer: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível transferir: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -571,11 +571,11 @@ func tradeBuy(deps Deps) http.HandlerFunc {
 		}
 		secID, qty, price, fees, date, ok := parseTradeForm(req)
 		if !ok {
-			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid quantity, price, and date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Informe um ativo, uma quantidade, um preço e uma data válidos.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Transactions.Buy(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not record buy: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar a compra: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -591,11 +591,11 @@ func tradeSell(deps Deps) http.HandlerFunc {
 		}
 		secID, qty, price, fees, date, ok := parseTradeForm(req)
 		if !ok {
-			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid quantity, price, and date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Informe um ativo, uma quantidade, um preço e uma data válidos.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Transactions.Sell(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not record sell: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar a venda: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -610,18 +610,18 @@ func tradeDividend(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		secID, sErr := strconv.ParseInt(req.PostFormValue("security_id"), 10, 64)
 		amount, aErr := decimal.NewFromString(req.PostFormValue("amount"))
 		date, dErr := time.Parse("2006-01-02", req.PostFormValue("date"))
 		if sErr != nil || aErr != nil || dErr != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Enter a security, a valid amount, and a date.", http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Informe um ativo, um valor válido e uma data.", http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Transactions.Dividend(req.Context(), acctID, secID, amount, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Could not record dividend: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar o dividendo: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -675,7 +675,7 @@ func importPreview(deps Deps) http.HandlerFunc {
 		content := readImportContent(req)
 		res, err := deps.Imports.Preview(req.Context(), acctID, content)
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, "Could not read import: "+err.Error(), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, content, nil, "Não foi possível ler a importação: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		renderImport(deps, w, req, acctID, content, &res, "", http.StatusOK)
@@ -690,13 +690,13 @@ func importCommit(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		content := req.PostFormValue("content")
 		res, err := deps.Imports.Commit(req.Context(), acctID, content)
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, "Could not import: "+err.Error(), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, content, nil, "Não foi possível importar: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		_ = res
@@ -732,13 +732,13 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 		for _, r := range res.Rows {
 			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Raw: r.Raw}
 			if r.OK {
-				ir.Date = r.Date.Format("2006-01-02")
+				ir.Date = r.Date.Format("02/01/2006")
 				ir.Type = r.Type
 				sign := "+"
 				if r.Type == "expense" {
 					sign = "-"
 				}
-				ir.Amount = sign + money.New(r.Amount, acct.Currency).String()
+				ir.Amount = sign + money.New(r.Amount, acct.Currency).Display()
 			}
 			rows = append(rows, ir)
 		}
@@ -795,7 +795,7 @@ func mapRegisterRows(regRows []transaction.RegisterRow) []web.RegisterRow {
 	for _, r := range regRows {
 		rows = append(rows, web.RegisterRow{
 			ID:          r.ID,
-			Date:        r.Date.Format("2006-01-02"),
+			Date:        r.Date.Format("02/01/2006"),
 			Type:        string(r.Type),
 			Description: r.Description,
 			Category:    r.Category,
@@ -813,16 +813,16 @@ func mapRegisterRows(regRows []transaction.RegisterRow) []web.RegisterRow {
 // income/expense, neutral legs for transfers (presentation only).
 func registerAmount(r transaction.RegisterRow) string {
 	if r.IsTransfer {
-		s := r.Amount.String()
+		s := r.Amount.Display()
 		if r.CrossCurrency {
-			s += " → " + r.ToAmount.String()
+			s += " → " + r.ToAmount.Display()
 		}
 		return s
 	}
 	if r.Incoming {
-		return "+" + r.Amount.String()
+		return "+" + r.Amount.Display()
 	}
-	return "-" + r.Amount.String()
+	return "-" + r.Amount.Display()
 }
 
 func categoriesPage(deps Deps) http.HandlerFunc {
@@ -834,13 +834,13 @@ func categoriesPage(deps Deps) http.HandlerFunc {
 func categoriesCreate(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		name := req.PostFormValue("name")
 		kind := category.Kind(req.PostFormValue("kind"))
 		if _, err := deps.Categories.Create(req.Context(), name, kind); err != nil {
-			renderCategories(deps, w, req, "Could not create category: "+err.Error(), http.StatusBadRequest)
+			renderCategories(deps, w, req, "Não foi possível criar a categoria: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/categories", http.StatusSeeOther)
@@ -850,17 +850,17 @@ func categoriesCreate(deps Deps) http.HandlerFunc {
 func categoriesDelete(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
 		if err != nil {
-			renderCategories(deps, w, req, "Invalid category id.", http.StatusBadRequest)
+			renderCategories(deps, w, req, "ID de categoria inválido.", http.StatusBadRequest)
 			return
 		}
 		force := req.PostFormValue("force") == "true"
 		if err := deps.Categories.Delete(req.Context(), id, force); err != nil {
-			renderCategories(deps, w, req, "Could not delete category: "+err.Error(), http.StatusBadRequest)
+			renderCategories(deps, w, req, "Não foi possível excluir a categoria: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/categories", http.StatusSeeOther)
@@ -906,13 +906,13 @@ func categorySummary(deps Deps) http.HandlerFunc {
 			for _, t := range txns {
 				rows = append(rows, web.CategoryTxRow{
 					Account:     t.AccountName,
-					Date:        t.Date.Format("2006-01-02"),
+					Date:        t.Date.Format("02/01/2006"),
 					Description: t.Description,
-					Amount:      t.Amount.String(),
+					Amount:      t.Amount.Display(),
 				})
 			}
 			for _, m := range sums {
-				totals = append(totals, m.String())
+				totals = append(totals, m.Display())
 			}
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -929,7 +929,7 @@ func securitiesPage(deps Deps) http.HandlerFunc {
 func securitiesCreate(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		symbol := req.PostFormValue("symbol")
@@ -937,7 +937,7 @@ func securitiesCreate(deps Deps) http.HandlerFunc {
 		typ := security.SecurityType(req.PostFormValue("type"))
 		quote := money.Currency(req.PostFormValue("quote_currency"))
 		if _, err := deps.Securities.Create(req.Context(), symbol, name, typ, quote); err != nil {
-			renderSecurities(deps, w, req, "Could not add security: "+err.Error(), http.StatusBadRequest)
+			renderSecurities(deps, w, req, "Não foi possível adicionar o ativo: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/securities", http.StatusSeeOther)
@@ -1023,14 +1023,14 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	// Credit accounts present their balance as a positive amount owed (a
 	// liability); cash/investment show the signed balance. The owed figure is
 	// produced by domain (AD-10) — http only renders it.
-	balLabel := "Balance"
+	balLabel := "Saldo"
 	balStr := ""
 	if bal, bErr := deps.Transactions.Balance(req.Context(), acctID); bErr == nil {
 		if account.AccountType(acct.Type) == account.Credit {
-			balLabel = "Balance owed"
-			balStr = domain.AmountOwed(bal).String()
+			balLabel = "Saldo devedor"
+			balStr = domain.AmountOwed(bal).Display()
 		} else {
-			balStr = bal.String()
+			balStr = bal.Display()
 		}
 	}
 	var rows []web.TxRow
@@ -1045,13 +1045,14 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 			row := web.TxRow{
 				ID:           t.ID,
 				Type:         string(t.Type),
-				Date:         t.Date.Format("2006-01-02"),
+				Date:         t.Date.Format("02/01/2006"),
+				EditDate:     t.Date.Format("2006-01-02"),
 				Description:  t.Description,
 				Counterparty: t.Counterparty,
 				Category:     t.CategoryName,
 				CategoryID:   t.CategoryID,
-				Amount:       t.Amount.String(),
-				Signed:       sign + money.New(t.Amount, acct.Currency).String(),
+				Amount:       t.Amount.String(), // canonical: feeds the edit-form <input>, must round-trip through the parser
+				Signed:       sign + money.New(t.Amount, acct.Currency).Display(),
 				Incoming:     t.Incoming,
 				Editable:     t.Type != transaction.Transfer,
 			}
@@ -1063,7 +1064,7 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		}
 	}
 	if !editing {
-		edit = web.TxRow{Type: string(transaction.Income), Date: time.Now().Format("2006-01-02")}
+		edit = web.TxRow{Type: string(transaction.Income), EditDate: time.Now().Format("2006-01-02")}
 	}
 	types := []string{string(transaction.Income), string(transaction.Expense)}
 
@@ -1100,7 +1101,7 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request, acct account.Account, errMsg string, code int) {
 	balStr := ""
 	if bal, bErr := deps.Transactions.Balance(req.Context(), acct.ID); bErr == nil {
-		balStr = bal.String()
+		balStr = bal.Display()
 	}
 
 	var holdings []web.HoldingRow
@@ -1113,23 +1114,23 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 			row := web.HoldingRow{
 				Symbol:       h.Symbol,
 				Name:         h.Name,
-				Quantity:     h.Quantity.String(),
-				AvgCost:      h.AvgCost.String(),
-				CostBasis:    h.CostBasis.String(),
-				RealizedGain: h.RealizedGain.String(),
+				Quantity:     money.FormatDecimal(h.Quantity),
+				AvgCost:      h.AvgCost.Display(),
+				CostBasis:    h.CostBasis.Display(),
+				RealizedGain: h.RealizedGain.Display(),
 				HasPrice:     h.HasPrice,
 			}
 			if h.HasPrice {
-				row.Price = h.Price.String()
-				row.PriceDate = h.PriceDate.Format("2006-01-02")
-				row.MarketValue = h.MarketValue.String()
-				row.UnrealizedGain = h.UnrealizedGain.String()
+				row.Price = h.Price.Display()
+				row.PriceDate = h.PriceDate.Format("02/01/2006")
+				row.MarketValue = h.MarketValue.Display()
+				row.UnrealizedGain = h.UnrealizedGain.Display()
 				row.UnrealizedPositive = h.UnrealizedGain.Amount().IsPositive()
 				row.UnrealizedNegative = h.UnrealizedGain.Amount().IsNegative()
 			}
 			holdings = append(holdings, row)
 		}
-		realized = rg.String()
+		realized = rg.Display()
 	}
 
 	var rows []web.TxRow
@@ -1142,12 +1143,12 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 			rows = append(rows, web.TxRow{
 				ID:          t.ID,
 				Type:        string(t.Type),
-				Date:        t.Date.Format("2006-01-02"),
+				Date:        t.Date.Format("02/01/2006"),
 				Description: t.Description,
 				Security:    t.Security,
-				Quantity:    t.Quantity.String(),
-				Price:       t.Price.String(),
-				Signed:      sign + money.New(t.Amount, acct.Currency).String(),
+				Quantity:    money.FormatDecimal(t.Quantity),
+				Price:       money.FormatDecimal(t.Price),
+				Signed:      sign + money.New(t.Amount, acct.Currency).Display(),
 				Incoming:    t.Incoming,
 				Editable:    false, // trades corrected via delete + re-add
 			})
@@ -1180,9 +1181,9 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		d, err := deps.Valuation.Dashboard(req.Context())
 		if err != nil {
-			msg := "Could not load your dashboard right now. Please try again."
+			msg := "Não foi possível carregar seu painel agora. Tente novamente."
 			if errors.Is(err, valuation.ErrOversold) {
-				msg = "A sell exceeds the quantity held in an investment account — fix the offending trade so your dashboard can be valued."
+				msg = "Uma venda excede a quantidade mantida em uma conta de investimento — corrija a operação para que seu painel possa ser avaliado."
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1192,10 +1193,10 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 
 		view := web.DashboardView{
 			Cards: []web.KPICardView{
-				kpiCard("Net worth", "networth", d.NetWorth),
-				kpiCard("Portfolio value", "portfolio", d.Portfolio),
-				kpiCard("Total gain/loss", "gainloss", d.GainLoss),
-				kpiCard("Cash", "cash", d.Cash),
+				kpiCard("Patrimônio líquido", "networth", d.NetWorth),
+				kpiCard("Valor da carteira", "portfolio", d.Portfolio),
+				kpiCard("Ganho/perda total", "gainloss", d.GainLoss),
+				kpiCard("Caixa", "cash", d.Cash),
 			},
 		}
 		if len(d.Missing) > 0 {
@@ -1220,7 +1221,7 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 		view.Chart = buildChart(points, rng, by)
 		if sErr != nil {
 			view.Chart = buildChart(nil, rng, by)
-			view.Chart.Empty = "Couldn't load your trend chart right now. Please try again."
+			view.Chart.Empty = "Não foi possível carregar o gráfico de evolução agora. Tente novamente."
 		}
 
 		// Allocation breakdown (Story 5.4). Same graceful degradation: an error
@@ -1229,7 +1230,7 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 		view.Allocation = buildAllocation(alloc, rng)
 		if aErr != nil {
 			view.Allocation = buildAllocation(valuation.Allocation{By: by}, rng)
-			view.Allocation.Empty = "Couldn't load your allocation right now. Please try again."
+			view.Allocation.Empty = "Não foi possível carregar sua alocação agora. Tente novamente."
 		}
 
 		// Insight call-out (Story 5.5, UX-DR6) — the month-over-month Net Worth
@@ -1304,7 +1305,7 @@ func buildChart(points []valuation.SeriesPoint, active, by string) web.ChartView
 		cv.Display = string(points[0].Value.Currency())
 	}
 	if len(points) < 2 {
-		cv.Empty = "Not enough history yet — add prices and exchange rates over time and your trend will appear here."
+		cv.Empty = "Ainda não há histórico suficiente — adicione preços e taxas de câmbio ao longo do tempo e sua evolução aparecerá aqui."
 		return cv
 	}
 
@@ -1346,7 +1347,7 @@ func buildChart(points []valuation.SeriesPoint, active, by string) web.ChartView
 		} else {
 			fmt.Fprintf(&area, " L%d,%d", x, y)
 		}
-		cps[i] = web.ChartPoint{X: x, Y: y, Date: p.Date.Format("2006-01-02"), Value: p.Value.String()}
+		cps[i] = web.ChartPoint{X: x, Y: y, Date: p.Date.Format("02/01/2006"), Value: p.Value.Display()}
 	}
 	fmt.Fprintf(&area, " L%d,%d Z", cps[n-1].X, baseline)
 
@@ -1354,8 +1355,8 @@ func buildChart(points []valuation.SeriesPoint, active, by string) web.ChartView
 	cv.Line = line.String()
 	cv.Area = area.String()
 	cv.Points = cps
-	cv.MinLabel = money.New(lo, cur).String()
-	cv.MaxLabel = money.New(hi, cur).String()
+	cv.MinLabel = money.New(lo, cur).Display()
+	cv.MaxLabel = money.New(hi, cur).Display()
 	cv.StartLabel = cps[0].Date
 	cv.EndLabel = cps[n-1].Date
 	return cv
@@ -1386,7 +1387,7 @@ var allocPalette = []string{"alloc-1", "alloc-2", "alloc-3", "alloc-4", "alloc-5
 // groups → the empty state. The arcs use the reconciled integer percents (which
 // sum to 100), so the ring is whole.
 func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
-	bys := []web.AllocBy{{Key: "security", Label: "Security"}, {Key: "account", Label: "Account"}}
+	bys := []web.AllocBy{{Key: "security", Label: "Ativo"}, {Key: "account", Label: "Conta"}}
 	active := valuation.AllocBy(a.By)
 	for i := range bys {
 		bys[i].Href = "/?range=" + rng + "&by=" + bys[i].Key
@@ -1402,12 +1403,12 @@ func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
 		av.MissingCodes = strings.Join(codes, ", ")
 	}
 	if len(a.Groups) == 0 {
-		av.Empty = "No invested holdings to allocate yet — add securities, transactions and prices and your mix will appear here."
+		av.Empty = "Ainda não há posições investidas para alocar — adicione ativos, transações e preços e sua distribuição aparecerá aqui."
 		return av
 	}
 
 	av.HasData = true
-	av.Total = a.Total.String()
+	av.Total = a.Total.Display()
 	circumference := allocPi.Mul(decimal.NewFromInt(2 * allocR)) // 2πr
 	hundred := decimal.NewFromInt(100)
 	cum := 0
@@ -1424,7 +1425,7 @@ func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
 			Swatch:     "bg-" + base,
 			Key:        g.Key,
 			Percent:    g.Percent,
-			Value:      g.Value.String(),
+			Value:      g.Value.Display(),
 		}
 		cum += g.Percent
 	}
@@ -1443,25 +1444,23 @@ const recentTxLimit = 5
 func buildInsight(ins valuation.Insight) web.InsightView {
 	if !ins.HasData {
 		return web.InsightView{
-			Empty: "Add transactions and prices over the month and your net-worth trend will appear here.",
+			Empty: "Adicione transações e preços ao longo do mês e a evolução do seu patrimônio aparecerá aqui.",
 		}
 	}
-	verb := "flat"
-	switch {
-	case ins.Up:
-		verb = "up"
-	case ins.Down:
-		verb = "down"
-	}
-	text := "Your net worth is " + verb + " this month"
+	// "Seu patrimônio subiu/caiu X,X% neste mês" (estável quando sem variação). The
+	// percentage is the canonical domain figure, shown at 1 dp in Brazilian format.
+	text := "Seu patrimônio está estável neste mês"
 	if ins.Up || ins.Down {
-		// Format to 1 dp like the KPI delta (StringFixed) for a consistent "X.X%".
-		text = "Your net worth is " + verb + " " + ins.Pct.Abs().StringFixed(1) + "% this month"
+		verb := "subiu"
+		if ins.Down {
+			verb = "caiu"
+		}
+		text = "Seu patrimônio " + verb + " " + money.FormatDecimalFixed(ins.Pct.Abs(), 1) + "% neste mês"
 	}
 	return web.InsightView{
 		HasData:  true,
 		Text:     text,
-		NetWorth: ins.NetWorth.String(),
+		NetWorth: ins.NetWorth.Display(),
 		Up:       ins.Up,
 		Down:     ins.Down,
 		Partial:  ins.Partial,
@@ -1476,9 +1475,9 @@ func kpiCard(label, icon string, k valuation.KPI) web.KPICardView {
 	// so pass the MAGNITUDE to avoid a double sign (e.g. "−-100.0000 BRL"). The
 	// unflagged value cards keep their signed string, so a negative Net Worth
 	// still shows its own "−".
-	disp := k.Value.String()
+	disp := k.Value.Display()
 	if k.Positive || k.Negative {
-		disp = k.Value.Abs().String()
+		disp = k.Value.Abs().Display()
 	}
 	return web.KPICardView{
 		Label: label,
@@ -1500,7 +1499,7 @@ func deltaText(k valuation.KPI) web.DeltaText {
 		return web.DeltaText{None: true}
 	}
 	return web.DeltaText{
-		Display: k.DeltaPct.Abs().StringFixed(1) + "%",
+		Display: money.FormatDecimalFixed(k.DeltaPct.Abs(), 1) + "%",
 		Up:      k.DeltaUp,
 		Down:    k.DeltaDown,
 	}
@@ -1516,9 +1515,9 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		p, err := deps.Valuation.Portfolio(req.Context())
 		if err != nil {
-			msg := "Could not load your portfolio right now. Please try again."
+			msg := "Não foi possível carregar sua carteira agora. Tente novamente."
 			if errors.Is(err, valuation.ErrOversold) {
-				msg = "A sell exceeds the quantity held in an investment account — fix the offending trade so your portfolio can be valued."
+				msg = "Uma venda excede a quantidade mantida em uma conta de investimento — corrija a operação para que sua carteira possa ser avaliada."
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1527,13 +1526,13 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 		}
 
 		view := web.InvestmentsView{
-			NetWorth:       p.NetWorth.String(),
-			PortfolioValue: p.PortfolioValue.String(),
+			NetWorth:       p.NetWorth.Display(),
+			PortfolioValue: p.PortfolioValue.Display(),
 			Display:        string(p.Display),
 		}
 		for _, m := range p.RealizedByCurrency {
 			view.Realized = append(view.Realized, web.RealizedChip{
-				Amount:   m.String(),
+				Amount:   m.Display(),
 				Positive: m.Amount().IsPositive(),
 				Negative: m.Amount().IsNegative(),
 			})
@@ -1554,15 +1553,15 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 				Symbol:    h.Symbol,
 				Name:      h.Name,
 				Currency:  string(h.Currency),
-				Quantity:  h.Quantity.String(),
-				CostBasis: h.CostBasis.String(),
+				Quantity:  money.FormatDecimal(h.Quantity),
+				CostBasis: h.CostBasis.Display(),
 				HasPrice:  h.HasPrice,
 			}
 			if h.HasPrice {
-				row.Price = h.Price.String()
-				row.PriceDate = h.PriceDate.Format("2006-01-02")
-				row.Valuation = h.Valuation.String()
-				row.UnrealizedGain = h.UnrealizedGain.String()
+				row.Price = h.Price.Display()
+				row.PriceDate = h.PriceDate.Format("02/01/2006")
+				row.Valuation = h.Valuation.Display()
+				row.UnrealizedGain = h.UnrealizedGain.Display()
 				row.UnrealizedPositive = h.UnrealizedGain.Amount().IsPositive()
 				row.UnrealizedNegative = h.UnrealizedGain.Amount().IsNegative()
 			}
@@ -1603,7 +1602,7 @@ func exportData(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		exp, err := deps.Backup.Export(req.Context())
 		if err != nil {
-			http.Error(w, "Could not export your data right now. Please try again.", http.StatusInternalServerError)
+			http.Error(w, "Não foi possível exportar seus dados agora. Tente novamente.", http.StatusInternalServerError)
 			return
 		}
 		filename := "financas-export-" + time.Now().UTC().Format("2006-01-02") + ".json"
@@ -1633,25 +1632,25 @@ func restoreData(deps Deps) http.HandlerFunc {
 		if err := req.ParseMultipartForm(restoreMaxBytes); err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				renderSettings(deps, w, req, "That backup file is too large to restore.", true, http.StatusBadRequest)
+				renderSettings(deps, w, req, "Esse arquivo de backup é grande demais para restaurar.", true, http.StatusBadRequest)
 				return
 			}
-			renderSettings(deps, w, req, "Could not read the upload. Please choose a valid backup file.", true, http.StatusBadRequest)
+			renderSettings(deps, w, req, "Não foi possível ler o envio. Escolha um arquivo de backup válido.", true, http.StatusBadRequest)
 			return
 		}
 		if req.PostFormValue("confirm") != "on" {
-			renderSettings(deps, w, req, "Tick the box to confirm — restoring replaces all your current data with the backup's contents.", true, http.StatusBadRequest)
+			renderSettings(deps, w, req, "Marque a caixa para confirmar — restaurar substitui todos os seus dados atuais pelo conteúdo do backup.", true, http.StatusBadRequest)
 			return
 		}
 		f, _, err := req.FormFile("file")
 		if err != nil {
-			renderSettings(deps, w, req, "Choose a backup file to restore.", true, http.StatusBadRequest)
+			renderSettings(deps, w, req, "Escolha um arquivo de backup para restaurar.", true, http.StatusBadRequest)
 			return
 		}
 		defer f.Close()
 		raw, err := io.ReadAll(io.LimitReader(f, restoreMaxBytes))
 		if err != nil {
-			renderSettings(deps, w, req, "Could not read the backup file. Please try again.", true, http.StatusBadRequest)
+			renderSettings(deps, w, req, "Não foi possível ler o arquivo de backup. Tente novamente.", true, http.StatusBadRequest)
 			return
 		}
 		if _, err := deps.Backup.Restore(req.Context(), raw); err != nil {
@@ -1667,13 +1666,13 @@ func restoreData(deps Deps) http.HandlerFunc {
 func restoreErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, backup.ErrUnsupportedSchema):
-		return "That file isn't a Financas backup — nothing was changed."
+		return "Esse arquivo não é um backup do Financas — nada foi alterado."
 	case errors.Is(err, backup.ErrUnsupportedVersion):
-		return "That backup was made by an incompatible version of Financas — nothing was changed."
+		return "Esse backup foi feito por uma versão incompatível do Financas — nada foi alterado."
 	case errors.Is(err, backup.ErrMalformed):
-		return "That backup file is invalid or incomplete — nothing was changed."
+		return "Esse arquivo de backup é inválido ou está incompleto — nada foi alterado."
 	default:
-		return "Could not restore from that file — nothing was changed."
+		return "Não foi possível restaurar a partir desse arquivo — nada foi alterado."
 	}
 }
 
@@ -1681,7 +1680,7 @@ func settingsForm(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		notice := ""
 		if req.URL.Query().Get("restored") != "" {
-			notice = "Your data was restored from the backup."
+			notice = "Seus dados foram restaurados do backup."
 		}
 		renderSettings(deps, w, req, notice, false, http.StatusOK)
 	}
@@ -1704,7 +1703,7 @@ func renderSettings(deps Deps, w http.ResponseWriter, req *http.Request, notice 
 func settingsSubmit(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		// Reject unsupported values; the service is the validation authority.
@@ -1763,7 +1762,7 @@ func loginForm(sm *scs.SessionManager) http.HandlerFunc {
 func loginSubmit(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if err := req.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
 			return
 		}
 		username := req.PostFormValue("username")
@@ -1772,7 +1771,7 @@ func loginSubmit(deps Deps) http.HandlerFunc {
 		if err := deps.Auth.Authenticate(req.Context(), username, password); err != nil {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
-			_ = web.Login("Invalid credentials").Render(req.Context(), w)
+			_ = web.Login("Credenciais inválidas").Render(req.Context(), w)
 			return
 		}
 
