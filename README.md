@@ -309,6 +309,17 @@ percentage change) lives in `domain` (AD-10) and is decimal, never float (NFR-5)
 the handler only formats. Partial-total notices (missing rate / unpriced) mirror
 `/investments` so a figure is never silently wrong.
 
+Below the KPI row, a **value-over-time trend chart** plots Net Worth in the
+Display Currency, **sampled at each Price/Exchange-Rate effective date** and valued
+**as of that date** (then-current rate — never retroactively repriced at today's
+rate, AD-6/AD-11). The series is **derived from the effective-dated history with no
+snapshot table** (reusing the same `portfolioAsOf` as-of valuation the KPI deltas
+use); a `?range=` toggle (1M / 3M / 1Y / All) windows it. The chart is a
+**server-rendered inline `<svg>`** — no JS chart library, no client charting — with
+the geometry computed in the http layer (the financial core stays float-free).
+Historical points that were missing a rate are flagged as partial; with fewer than
+two points the card shows a calm empty state until history accrues.
+
 ## Money & decimal correctness
 
 All monetary and quantity values use `github.com/shopspring/decimal` — **never

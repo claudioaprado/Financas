@@ -8,6 +8,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -124,6 +125,7 @@ type Imports interface {
 type Valuation interface {
 	Portfolio(ctx context.Context) (valuation.Portfolio, error)
 	Dashboard(ctx context.Context) (valuation.Dashboard, error)
+	ValueSeries(ctx context.Context, from time.Time) ([]valuation.SeriesPoint, error)
 }
 
 // Deps are the collaborators the router needs, injected by main.
@@ -1184,9 +1186,128 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 			view.UnpricedSymbols = strings.Join(d.Unpriced, ", ")
 		}
 
+		// Value-over-time trend chart (Story 5.3). A series failure degrades to an
+		// empty chart card (the KPIs still render) — with a distinct "couldn't load"
+		// message so an error is never mistaken for "no history yet".
+		rng := chartRange(req.URL.Query().Get("range"))
+		points, sErr := deps.Valuation.ValueSeries(req.Context(), chartFrom(rng))
+		view.Chart = buildChart(points, rng)
+		if sErr != nil {
+			view.Chart = buildChart(nil, rng)
+			view.Chart.Empty = "Couldn't load your trend chart right now. Please try again."
+		}
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), view).Render(req.Context(), w)
 	}
+}
+
+// chartRange normalizes the ?range= query value to a supported key, defaulting
+// to "1y" (a sensible window once over a year of history exists; with less it
+// naturally shows everything).
+func chartRange(v string) string {
+	switch v {
+	case "1m", "3m", "1y", "all":
+		return v
+	default:
+		return "1y"
+	}
+}
+
+// chartFrom maps a range key to the window-start passed to ValueSeries. "all"
+// returns the zero time (full history). The service normalizes the date.
+func chartFrom(rng string) time.Time {
+	now := time.Now()
+	switch rng {
+	case "1m":
+		return now.AddDate(0, -1, 0)
+	case "3m":
+		return now.AddDate(0, -3, 0)
+	case "1y":
+		return now.AddDate(-1, 0, 0)
+	default: // "all"
+		return time.Time{}
+	}
+}
+
+// chart viewBox geometry: a 1000×300 box with padding so the line clears the edges.
+const (
+	chartW   = 1000
+	chartH   = 300
+	chartPad = 24
+)
+
+// buildChart turns the Net Worth series into ready-to-render SVG geometry
+// (presentation only — AD-1; the financial figures arrive as money.Money). It
+// maps each point to integer viewBox coordinates (value→y via decimal ratio, no
+// float in the core) and emits the line polyline + filled area path, axis labels,
+// the range toggle, and the partial note. Fewer than two points → the empty state.
+func buildChart(points []valuation.SeriesPoint, active string) web.ChartView {
+	ranges := []web.ChartRange{{Key: "1m", Label: "1M"}, {Key: "3m", Label: "3M"}, {Key: "1y", Label: "1Y"}, {Key: "all", Label: "All"}}
+	for i := range ranges {
+		ranges[i].Href = "/?range=" + ranges[i].Key
+		ranges[i].Active = ranges[i].Key == active
+	}
+	cv := web.ChartView{Range: active, Ranges: ranges}
+	if len(points) > 0 {
+		cv.Display = string(points[0].Value.Currency())
+	}
+	if len(points) < 2 {
+		cv.Empty = "Not enough history yet — add prices and exchange rates over time and your trend will appear here."
+		return cv
+	}
+
+	cur := points[0].Value.Currency()
+	lo, hi := points[0].Value.Amount(), points[0].Value.Amount()
+	for _, p := range points {
+		a := p.Value.Amount()
+		if a.LessThan(lo) {
+			lo = a
+		}
+		if a.GreaterThan(hi) {
+			hi = a
+		}
+		if p.Partial {
+			cv.Partial = true
+		}
+	}
+	span := hi.Sub(lo)
+	drawH := decimal.NewFromInt(chartH - 2*chartPad)
+	baseline := chartH - chartPad
+	n := len(points)
+
+	var line strings.Builder
+	var area strings.Builder
+	cps := make([]web.ChartPoint, n)
+	for i, p := range points {
+		x := chartPad + (chartW-2*chartPad)*i/(n-1)
+		y := chartH / 2 // flat line when every value is equal
+		if !span.IsZero() {
+			ratio := hi.Sub(p.Value.Amount()).Div(span) // 0 at the max (top), 1 at the min (bottom)
+			y = chartPad + int(ratio.Mul(drawH).IntPart())
+		}
+		if i > 0 {
+			line.WriteByte(' ')
+		}
+		fmt.Fprintf(&line, "%d,%d", x, y)
+		if i == 0 {
+			fmt.Fprintf(&area, "M%d,%d L%d,%d", x, baseline, x, y)
+		} else {
+			fmt.Fprintf(&area, " L%d,%d", x, y)
+		}
+		cps[i] = web.ChartPoint{X: x, Y: y, Date: p.Date.Format("2006-01-02"), Value: p.Value.String()}
+	}
+	fmt.Fprintf(&area, " L%d,%d Z", cps[n-1].X, baseline)
+
+	cv.HasData = true
+	cv.Line = line.String()
+	cv.Area = area.String()
+	cv.Points = cps
+	cv.MinLabel = money.New(lo, cur).String()
+	cv.MaxLabel = money.New(hi, cur).String()
+	cv.StartLabel = cps[0].Date
+	cv.EndLabel = cps[n-1].Date
+	return cv
 }
 
 // kpiCard maps a valuation.KPI into its pre-formatted view row: the money string

@@ -68,6 +68,52 @@ func TestDashboardPageRendersKPICards(t *testing.T) {
 	}
 }
 
+func TestDashboardPageRendersTrendChart(t *testing.T) {
+	view := DashboardView{
+		Chart: ChartView{
+			HasData:    true,
+			Line:       "24,250 500,120 976,24",
+			Area:       "M24,276 L24,250 L500,120 L976,24 L976,276 Z",
+			Points:     []ChartPoint{{X: 24, Y: 250, Date: "2026-06-01", Value: "5000.0000 BRL"}},
+			MinLabel:   "5000.0000 BRL",
+			MaxLabel:   "5300.0000 BRL",
+			StartLabel: "2026-06-01",
+			EndLabel:   "2026-06-20",
+			Display:    "BRL",
+			Range:      "1y",
+			Partial:    true,
+			Ranges: []ChartRange{
+				{Key: "1m", Label: "1M", Href: "/?range=1m"},
+				{Key: "1y", Label: "1Y", Href: "/?range=1y", Active: true},
+			},
+		},
+	}
+	html := renderToString(t, DashboardPage(ShellData{Active: "dashboard"}, view))
+	for _, want := range []string{
+		"Net worth over time", "BRL",
+		"<svg", "<polyline", "24,250 500,120 976,24",
+		"5000.0000 BRL", "5300.0000 BRL", "2026-06-01", "2026-06-20",
+		"<title>2026-06-01: 5000.0000 BRL</title>",
+		`href="/?range=1m"`, "Some points are partial",
+		`aria-current="true">1Y`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("trend chart missing %q", want)
+		}
+	}
+}
+
+func TestDashboardPageChartEmptyState(t *testing.T) {
+	view := DashboardView{Chart: ChartView{HasData: false, Empty: "Not enough history yet — soon!"}}
+	html := renderToString(t, DashboardPage(ShellData{Active: "dashboard"}, view))
+	if !strings.Contains(html, "Not enough history yet") {
+		t.Error("empty chart should render the empty-state copy")
+	}
+	if strings.Contains(html, "<polyline") {
+		t.Error("empty chart should not render a line")
+	}
+}
+
 func TestDashboardPageErrorBanner(t *testing.T) {
 	html := renderToString(t, DashboardPage(ShellData{Active: "dashboard"}, DashboardView{ErrMsg: "boom"}))
 	if !strings.Contains(html, "boom") || !strings.Contains(html, "text-loss") {

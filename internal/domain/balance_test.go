@@ -15,10 +15,10 @@ func TestAccountBalance(t *testing.T) {
 	const other int64 = 2
 
 	txns := []BalanceTxn{
-		{ToAccountID: acct, ToAmount: dec("100")},                                  // income +100
-		{FromAccountID: acct, FromAmount: dec("30")},                               // expense -30
-		{FromAccountID: acct, FromAmount: dec("20.50")},                            // expense -20.50
-		{ToAccountID: other, ToAmount: dec("999")},                                 // unrelated account, ignored
+		{ToAccountID: acct, ToAmount: dec("100")},                                             // income +100
+		{FromAccountID: acct, FromAmount: dec("30")},                                          // expense -30
+		{FromAccountID: acct, FromAmount: dec("20.50")},                                       // expense -20.50
+		{ToAccountID: other, ToAmount: dec("999")},                                            // unrelated account, ignored
 		{FromAccountID: acct, FromAmount: dec("40"), ToAccountID: other, ToAmount: dec("40")}, // transfer out -40
 	}
 

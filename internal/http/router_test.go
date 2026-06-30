@@ -522,6 +522,8 @@ func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.p
 type stubValuation struct {
 	portfolio valuation.Portfolio
 	dashboard valuation.Dashboard
+	series    []valuation.SeriesPoint
+	seriesErr error
 	err       error
 }
 
@@ -531,6 +533,20 @@ func (s *stubValuation) Portfolio(context.Context) (valuation.Portfolio, error) 
 
 func (s *stubValuation) Dashboard(context.Context) (valuation.Dashboard, error) {
 	return s.dashboard, s.err
+}
+
+func (s *stubValuation) ValueSeries(context.Context, time.Time) ([]valuation.SeriesPoint, error) {
+	return s.series, s.seriesErr
+}
+
+// cannedSeries is the default Net Worth trend served in handler tests: three
+// ascending points, the middle one partial (a held currency had no rate).
+func cannedSeries() []valuation.SeriesPoint {
+	return []valuation.SeriesPoint{
+		{Date: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), Value: money.New(decimal.RequireFromString("5000.0000"), money.BRL)},
+		{Date: time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC), Value: money.New(decimal.RequireFromString("5100.0000"), money.BRL), Partial: true},
+		{Date: time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC), Value: money.New(decimal.RequireFromString("5300.0000"), money.BRL)},
+	}
 }
 
 // cannedDashboard is the default KPI row served in handler tests: a gain with no
@@ -598,7 +614,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
-		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard()},
+		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries()},
 		OwnerName:     "TestOwner",
 	}
 }
@@ -850,6 +866,66 @@ func TestDashboardErrorBanner(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "sell exceeds the quantity held") {
 		t.Errorf("dashboard error banner missing oversold hint")
+	}
+}
+
+func dashboardBody(t *testing.T, deps Deps, path string) string {
+	t.Helper()
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+	}
+	return rec.Body.String()
+}
+
+func TestDashboardRendersTrendChart(t *testing.T) {
+	body := dashboardBody(t, testDeps(true, nil), "/")
+	// The SVG trend, min/max + date labels, range toggle, and partial note.
+	for _, want := range []string{
+		"Net worth over time", "<svg", "<polyline", "<path",
+		"5000.0000 BRL", "5300.0000 BRL", // min / max labels
+		"2026-06-01", "2026-06-20", // start / end dates
+		"1M", "3M", "1Y", "All", "/?range=1m", "/?range=all",
+		"Some points are partial", // a partial point present
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard chart missing %q", want)
+		}
+	}
+	// Default range is 1Y → that link is current.
+	if !strings.Contains(body, `aria-current="true">1Y`) {
+		t.Errorf("default range 1Y should be marked current")
+	}
+}
+
+func TestDashboardChartRangeActive(t *testing.T) {
+	body := dashboardBody(t, testDeps(true, nil), "/?range=1m")
+	if !strings.Contains(body, `aria-current="true">1M`) {
+		t.Errorf("?range=1m should mark the 1M link current")
+	}
+	if strings.Contains(body, `aria-current="true">1Y`) {
+		t.Errorf("1Y should not be current when range=1m")
+	}
+}
+
+func TestDashboardChartEmptyState(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Valuation = &stubValuation{
+		portfolio: cannedPortfolio(),
+		dashboard: cannedDashboard(),
+		series:    cannedSeries()[:1], // a single point → not enough for a line
+	}
+	body := dashboardBody(t, deps, "/")
+	if !strings.Contains(body, "Not enough history yet") {
+		t.Errorf("single-point series should render the empty state")
+	}
+	if strings.Contains(body, "<polyline") {
+		t.Errorf("empty chart should not render a line")
 	}
 }
 

@@ -120,10 +120,12 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		return Portfolio{}, fmt.Errorf("valuation: list transactions: %w", err)
 	}
 
-	// Balance legs + per-account trade events, restricted to rows occurring on or
-	// before asOf, compared DATE-to-DATE (occurred_on is a DATE; asOf may carry a
-	// wall-clock time) so the cut is calendar-based and timezone-stable, matching
-	// the `effective_date <= asOf::date` used for prices/rates. ListTransactions is
+	// asOfDay is asOf normalized to its UTC calendar date — the single bound used
+	// for the ledger cut AND the price/rate reads below, so all three agree even
+	// when asOf is a local-zoned time.Now() near the UTC-midnight boundary (a raw
+	// local time would otherwise resolve `$1::date` to the local date and skew the
+	// as-of window by a day). Balance legs + per-account trade events are restricted
+	// to rows occurring on or before asOfDay, compared DATE-to-DATE. ListTransactions is
 	// occurred_on DESC, id DESC; the average-cost fold needs chronological ASC, so
 	// each account's events are reversed below.
 	asOfDay := dateOnlyUTC(asOf)
@@ -156,7 +158,7 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		})
 	}
 
-	prices, err := latestPrices(ctx, q, asOf)
+	prices, err := latestPrices(ctx, q, asOfDay)
 	if err != nil {
 		return Portfolio{}, err
 	}
@@ -232,7 +234,7 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		}
 	}
 
-	rates := s.buildRates(ctx, q, display, asOf, cash, liabilities, holdingsMV, unrealized)
+	rates := s.buildRates(ctx, q, display, asOfDay, cash, liabilities, holdingsMV, unrealized)
 	v := domain.NetWorth(display, domain.ValuationInput{
 		Cash:        cash,
 		Liabilities: liabilities,
@@ -345,17 +347,13 @@ func setDelta(k *KPI, now, base money.Money) {
 	k.HasDelta = true
 }
 
-// priorSampleDate returns the period-change baseline date (AD-11): the
-// SECOND-most-recent distinct Price/ExchangeRate effective date on or before
-// today. The most recent such date is the one the CURRENT valuation already
-// reflects (prices/rates effective ≤ now), so the baseline is the sample BEFORE
-// it — comparing the latest sample against its predecessor. ok is false when
-// fewer than two distinct sample dates exist on or before today (the day-one
-// "—" state): with a single sample the current value has nothing prior to
-// compare against. Future-effective samples are ignored (they are not part of
-// the current value). Owner-entered history is small, so it scans in Go — no
-// snapshot table and no new query.
-func (s *Service) priorSampleDate(ctx context.Context, now time.Time) (time.Time, bool, error) {
+// sampleDates returns the distinct Price/ExchangeRate effective dates on or
+// before today (now's date), UTC-date-normalized and sorted ASCENDING. These are
+// the "sample" dates the value-over-time series and the period-change baseline
+// are derived from (AD-11): owner-entered history is small, so it scans in Go —
+// no snapshot table and no new query. Future-effective samples are excluded
+// (they are not part of any value as of today).
+func (s *Service) sampleDates(ctx context.Context, now time.Time) ([]time.Time, error) {
 	q := store.New(s.pool)
 	today := dateOnlyUTC(now)
 
@@ -369,28 +367,114 @@ func (s *Service) priorSampleDate(ctx context.Context, now time.Time) (time.Time
 
 	prices, err := q.ListPrices(ctx)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("valuation: list prices: %w", err)
+		return nil, fmt.Errorf("valuation: list prices: %w", err)
 	}
 	for _, p := range prices {
 		add(p.EffectiveDate)
 	}
 	rates, err := q.ListExchangeRates(ctx)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("valuation: list exchange rates: %w", err)
+		return nil, fmt.Errorf("valuation: list exchange rates: %w", err)
 	}
 	for _, r := range rates {
 		add(r.EffectiveDate)
 	}
 
-	if len(seen) < 2 {
-		return time.Time{}, false, nil // need a current sample AND a prior one
-	}
 	dates := make([]time.Time, 0, len(seen))
 	for d := range seen {
 		dates = append(dates, d)
 	}
-	sort.Slice(dates, func(i, j int) bool { return dates[i].After(dates[j]) }) // most-recent first
-	return dates[1], true, nil                                                 // the prior (second-most-recent) sample
+	sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) }) // ascending
+	return dates, nil
+}
+
+// priorSampleDate returns the period-change baseline date (AD-11): the
+// SECOND-most-recent distinct sample date on or before today (see sampleDates).
+// The most recent sample is the one the CURRENT valuation reflects, so the
+// baseline is the one before it. ok is false when fewer than two distinct sample
+// dates exist (the day-one "—" state): a single sample has nothing prior to
+// compare against.
+func (s *Service) priorSampleDate(ctx context.Context, now time.Time) (time.Time, bool, error) {
+	dates, err := s.sampleDates(ctx, now)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if len(dates) < 2 {
+		return time.Time{}, false, nil
+	}
+	return dates[len(dates)-2], true, nil // ascending → penultimate is second-most-recent
+}
+
+// SeriesPoint is one plotted Net Worth value at a historical date, valued AS OF
+// that date — using the prices/rates effective on or before it (never today's
+// rate, AD-11). Partial is set when a held currency had no rate at that date, so
+// the Net Worth there is a partial total (the unrated currency excluded, AD-6).
+type SeriesPoint struct {
+	Date    time.Time
+	Value   money.Money // Display Currency Net Worth as of Date
+	Partial bool
+}
+
+// ValueSeries returns the Display-Currency Net Worth series for the window
+// [from, today] (FR-12, AD-11): sampled at each Price/ExchangeRate effective date
+// in the window, plus the window boundary `from` and today, each valued AS OF its
+// own date via portfolioAsOf (then-current prices/rates — never retroactively
+// repriced at today's rate). A zero `from` means "all history" (start at the
+// earliest sample). Points are de-duplicated by date and sorted ascending. With
+// no history the series may have a single point (today); callers decide a line
+// needs ≥2. ErrOversold is propagated like Portfolio.
+func (s *Service) ValueSeries(ctx context.Context, from time.Time) ([]SeriesPoint, error) {
+	now := time.Now()
+	today := dateOnlyUTC(now)
+
+	samples, err := s.sampleDates(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+
+	set := make(map[time.Time]bool)
+	if from.IsZero() {
+		for _, d := range samples {
+			set[d] = true
+		}
+	} else {
+		fromDay := dateOnlyUTC(from)
+		// Add a boundary point at the window start ONLY when it falls within history
+		// (a sample exists on or before it) — so the line starts at the correct
+		// as-of value. If the window predates all history, skip it: a boundary there
+		// would value to zero and draw a long flat-zero lead-in; let the line start
+		// at the earliest in-window sample instead.
+		hasEarlier := len(samples) > 0 && !samples[0].After(fromDay)
+		if hasEarlier && !fromDay.After(today) {
+			set[fromDay] = true
+		}
+		for _, d := range samples {
+			if !d.Before(fromDay) { // d >= fromDay (samples are already ≤ today)
+				set[d] = true
+			}
+		}
+	}
+	set[today] = true // always end at the current value
+
+	dates := make([]time.Time, 0, len(set))
+	for d := range set {
+		dates = append(dates, d)
+	}
+	sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
+
+	points := make([]SeriesPoint, 0, len(dates))
+	for _, d := range dates {
+		p, err := s.portfolioAsOf(ctx, d)
+		if err != nil {
+			return nil, err // ErrOversold and read failures bubble up
+		}
+		points = append(points, SeriesPoint{
+			Date:    d,
+			Value:   p.NetWorth,
+			Partial: len(p.Missing) > 0,
+		})
+	}
+	return points, nil
 }
 
 // dateOnlyUTC normalizes a timestamp to UTC midnight so price/rate effective

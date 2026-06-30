@@ -5,6 +5,9 @@ import "strconv"
 // accountID renders an account's numeric id as a string for use in form fields.
 func accountID(id int64) string { return strconv.FormatInt(id, 10) }
 
+// itoa renders an int for an SVG coordinate attribute (Story 5.3 chart).
+func itoa(n int) string { return strconv.Itoa(n) }
+
 // countLabel renders a usage count for display.
 func countLabel(n int64) string { return strconv.FormatInt(n, 10) }
 
@@ -90,12 +93,51 @@ type KPICardView struct {
 	Delta  DeltaText
 }
 
-// DashboardView is the read model for the KPI card row (Story 5.2). Cards is the
-// ordered row (Net Worth, Portfolio Value, Total Gain/Loss, Cash). MissingCodes /
-// UnpricedSymbols carry the partial-total notices (same as /investments). When
-// ErrMsg is set only the error banner renders.
+// ChartPoint is one plotted point in the trend chart, in viewBox coordinates,
+// with its formatted date + value for a native SVG <title> hover (Story 5.3).
+type ChartPoint struct {
+	X, Y  int
+	Date  string
+	Value string
+}
+
+// ChartRange is one range-toggle option — a server-reload link (?range=key) with
+// Active marking the current window (Story 5.3).
+type ChartRange struct {
+	Key    string
+	Label  string
+	Href   string
+	Active bool
+}
+
+// ChartView is the dashboard's value-over-time trend chart (Story 5.3): the
+// pre-computed SVG geometry (Line polyline + Area path + Points), axis labels,
+// the range toggle, and a partial-total note. HasData is false when there are
+// fewer than two points — Empty then holds the empty-state copy. All geometry is
+// computed by the handler (presentation, AD-1); the templ only emits the <svg>.
+type ChartView struct {
+	HasData    bool
+	Line       string // polyline points: "x,y x,y ..."
+	Area       string // filled-area path d
+	Points     []ChartPoint
+	MinLabel   string
+	MaxLabel   string
+	StartLabel string
+	EndLabel   string
+	Display    string
+	Range      string
+	Ranges     []ChartRange
+	Partial    bool
+	Empty      string
+}
+
+// DashboardView is the read model for the dashboard (Story 5.2 + 5.3). Cards is
+// the KPI row (Net Worth, Portfolio Value, Total Gain/Loss, Cash); Chart is the
+// value-over-time trend. MissingCodes / UnpricedSymbols carry the partial-total
+// notices (same as /investments). When ErrMsg is set only the error banner renders.
 type DashboardView struct {
 	Cards           []KPICardView
+	Chart           ChartView
 	MissingCodes    string
 	UnpricedSymbols string
 	ErrMsg          string

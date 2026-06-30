@@ -475,6 +475,195 @@ func TestDashboardNoPriorSample(t *testing.T) {
 	}
 }
 
+// TestValueSeries exercises the value-over-time series: a holding priced 100
+// twenty days ago and 110 ten days ago, plus a cash deposit. The series must
+// have a point per sample date valued AS OF that date (the older point uses 100,
+// NOT today's 110 — proving no retroactive repricing, AD-11), end at today, and
+// a windowed call must start at the window boundary with the correct as-of value.
+func TestValueSeries(t *testing.T) {
+	ctx := context.Background()
+	url := isolatedDB(t, testDatabaseURL(t))
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	today := dateOnlyUTC(time.Now())
+	older := today.AddDate(0, 0, -20)
+	recent := today.AddDate(0, 0, -10)
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	wallet, err := accts.Create(ctx, fmt.Sprintf("Wallet-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	if _, err := txns.Record(ctx, wallet.ID, transaction.Income, req("5000"), older, "salary", 0); err != nil {
+		t.Fatalf("income: %v", err)
+	}
+	broker, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("SEC%d", run), "Stock", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("10"), req("100"), req("0"), older, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, older, req("100")); err != nil {
+		t.Fatalf("price older: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, recent, req("110")); err != nil {
+		t.Fatalf("price recent: %v", err)
+	}
+
+	// All history: points at older, recent, today.
+	all, err := svc.ValueSeries(ctx, time.Time{})
+	if err != nil {
+		t.Fatalf("ValueSeries(all): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ValueSeries(all) len = %d, want 3 (older, recent, today)", len(all))
+	}
+	// cash 5000−1000=4000; older holding 10×100=1000 → NW 5000 (OLD price, AD-11).
+	if !all[0].Date.Equal(older) || all[0].Value.String() != "5000.0000 BRL" {
+		t.Errorf("point[0] = {%s, %s}, want {%s, 5000.0000 BRL} (then-current price, not 110)",
+			all[0].Date.Format("2006-01-02"), all[0].Value, older.Format("2006-01-02"))
+	}
+	// recent holding 10×110=1100 → NW 5100.
+	if !all[1].Date.Equal(recent) || all[1].Value.String() != "5100.0000 BRL" {
+		t.Errorf("point[1] = {%s, %s}, want {%s, 5100.0000 BRL}", all[1].Date.Format("2006-01-02"), all[1].Value, recent.Format("2006-01-02"))
+	}
+	if !all[2].Date.Equal(today) || all[2].Value.String() != "5100.0000 BRL" {
+		t.Errorf("point[2] = {%s, %s}, want {today, 5100.0000 BRL}", all[2].Date.Format("2006-01-02"), all[2].Value)
+	}
+
+	// Windowed: from = today-15 excludes the older (today-20) sample but starts at
+	// the boundary with the correct as-of value (still the 100 price → 5000).
+	win, err := svc.ValueSeries(ctx, today.AddDate(0, 0, -15))
+	if err != nil {
+		t.Fatalf("ValueSeries(window): %v", err)
+	}
+	if len(win) != 3 {
+		t.Fatalf("ValueSeries(window) len = %d, want 3 (boundary, recent, today)", len(win))
+	}
+	if !win[0].Date.Equal(today.AddDate(0, 0, -15)) || win[0].Value.String() != "5000.0000 BRL" {
+		t.Errorf("window boundary = {%s, %s}, want {today-15, 5000.0000 BRL}", win[0].Date.Format("2006-01-02"), win[0].Value)
+	}
+	for _, p := range all {
+		if p.Partial {
+			t.Errorf("point %s unexpectedly partial", p.Date.Format("2006-01-02"))
+		}
+	}
+
+	// Window that predates all history must NOT add a pre-history boundary point
+	// (which would value to 0 and draw a flat-zero lead-in): the line starts at
+	// the earliest in-window sample instead.
+	pre, err := svc.ValueSeries(ctx, today.AddDate(0, 0, -40))
+	if err != nil {
+		t.Fatalf("ValueSeries(pre-history): %v", err)
+	}
+	if len(pre) == 0 || !pre[0].Date.Equal(older) {
+		t.Errorf("pre-history window first point = %v, want the earliest sample %s (no flat-zero lead-in)",
+			func() string {
+				if len(pre) == 0 {
+					return "<empty>"
+				}
+				return pre[0].Date.Format("2006-01-02")
+			}(), older.Format("2006-01-02"))
+	}
+}
+
+// TestValueSeriesPartialAndEmpty: a USD holding with no USD→BRL rate makes the
+// points partial; an empty database yields at most a single point (no line).
+func TestValueSeriesPartialAndEmpty(t *testing.T) {
+	ctx := context.Background()
+	base := testDatabaseURL(t)
+
+	// Empty DB → at most one point (today); callers render the empty state.
+	emptyURL := isolatedDB(t, base)
+	if err := store.Migrate(ctx, emptyURL, db.Migrations); err != nil {
+		t.Fatalf("migrate empty: %v", err)
+	}
+	emptyPool, err := store.NewPool(ctx, emptyURL)
+	if err != nil {
+		t.Fatalf("pool empty: %v", err)
+	}
+	defer emptyPool.Close()
+	if err := settings.New(emptyPool).SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display: %v", err)
+	}
+	empty, err := New(emptyPool).ValueSeries(ctx, time.Time{})
+	if err != nil {
+		t.Fatalf("ValueSeries(empty): %v", err)
+	}
+	if len(empty) > 1 {
+		t.Errorf("empty ValueSeries len = %d, want ≤ 1", len(empty))
+	}
+
+	// Partial: a USD holding priced with NO USD→BRL rate → Net Worth excludes USD.
+	url := isolatedDB(t, base)
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	accts := account.New(pool)
+	secs := security.New(pool)
+	txns := transaction.New(pool)
+	prices := price.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	today := dateOnlyUTC(time.Now())
+	d1 := today.AddDate(0, 0, -10)
+	if err := settings.New(pool).SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display: %v", err)
+	}
+	broker, err := accts.Create(ctx, fmt.Sprintf("USB-%d", run), account.Investment, money.USD)
+	if err != nil {
+		t.Fatalf("create broker: %v", err)
+	}
+	sec, err := secs.Create(ctx, fmt.Sprintf("US%d", run), "US Stock", security.Stock, money.USD)
+	if err != nil {
+		t.Fatalf("create sec: %v", err)
+	}
+	if _, err := txns.Buy(ctx, broker.ID, sec.ID, req("5"), req("20"), req("0"), d1, "buy"); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	if _, err := prices.Add(ctx, sec.ID, d1, req("30")); err != nil {
+		t.Fatalf("price: %v", err)
+	}
+	series, err := svc.ValueSeries(ctx, time.Time{})
+	if err != nil {
+		t.Fatalf("ValueSeries(partial): %v", err)
+	}
+	if len(series) == 0 {
+		t.Fatal("expected at least one point")
+	}
+	for _, p := range series {
+		if !p.Partial {
+			t.Errorf("point %s should be partial (USD has no rate to BRL)", p.Date.Format("2006-01-02"))
+		}
+	}
+}
+
 // assertRealized asserts the cumulative realized G/L for a currency.
 func assertRealized(t *testing.T, p Portfolio, cur money.Currency, want string) {
 	t.Helper()
