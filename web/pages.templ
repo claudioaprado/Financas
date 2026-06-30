@@ -316,6 +316,24 @@ templ ComingSoon(data ShellData, title string) {
 	}
 }
 
+// ErrorPage is the shell-framed generic error state shown with HTTP 500 when a
+// page's primary data can't be loaded (e.g. a database outage) and the page has
+// no error-banner slot of its own. An honest error beats a misleading empty page.
+templ ErrorPage(data ShellData, msg string) {
+	@Shell(data) {
+		<section class="max-w-md rounded-card bg-white p-6 shadow-card">
+			<p class="rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ msg }</p>
+		</section>
+	}
+}
+
+// ErrorFragment is the inline error returned (with HTTP 500) for an HTMX request
+// whose primary load failed, so a swapped region shows the failure instead of
+// silently emptying.
+templ ErrorFragment(msg string) {
+	<tr><td colspan="5" class="py-2 text-loss">{ msg }</td></tr>
+}
+
 // InvestmentsPage is the portfolio & Net Worth view (Story 4.4): a Net Worth
 // hero + Portfolio value + cumulative realized G/L (Display Currency totals via
 // convert-then-sum), a missing-rate warning (partial total, never blocked), an

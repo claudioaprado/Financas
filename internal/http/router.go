@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -267,17 +268,47 @@ func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
 	}
 }
 
+// loadErrorMsg is the banner shown when a page's PRIMARY data can't be loaded
+// (e.g. a database outage). Such a failure renders with HTTP 500 and this message
+// instead of a misleading empty page — an empty list under a 200 reads as "you
+// have no data", which on an outage is silently wrong (deferred-work: http-layer
+// error swallowing).
+const loadErrorMsg = "Não foi possível carregar esta página agora. Tente novamente."
+
+// logLoad records a data-load failure server-side. Primary loads pair it with a
+// 500 (the page can't be built); secondary loads (filter dropdowns, the shell
+// greeting) log and degrade gracefully so the rest of the page still works.
+func logLoad(req *http.Request, what string, err error) {
+	log.Printf("http: %s %s: %v", req.Method, what, err)
+}
+
+// renderError renders the generic error page (or an inline fragment for HTMX)
+// with HTTP 500. Used by primary-load handlers whose page component has no
+// error-banner slot of their own (the register, the category summary).
+func renderError(deps Deps, w http.ResponseWriter, req *http.Request, active, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusInternalServerError)
+	if req.Header.Get("HX-Request") == "true" {
+		_ = web.ErrorFragment(msg).Render(req.Context(), w)
+		return
+	}
+	_ = web.ErrorPage(shellData(deps, req.Context(), active), msg).Render(req.Context(), w)
+}
+
 func renderExchangeRates(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
 	var rows []web.RateRow
-	if rs, err := deps.ExchangeRates.List(req.Context()); err == nil {
-		for _, r := range rs {
-			rows = append(rows, web.RateRow{
-				From:          string(r.From),
-				To:            string(r.To),
-				EffectiveDate: r.EffectiveDate.Format("02/01/2006"),
-				Rate:          money.FormatDecimal(r.Rate),
-			})
-		}
+	rs, err := deps.ExchangeRates.List(req.Context())
+	if err != nil {
+		logLoad(req, "exchange-rates list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, r := range rs {
+		rows = append(rows, web.RateRow{
+			From:          string(r.From),
+			To:            string(r.To),
+			EffectiveDate: r.EffectiveDate.Format("02/01/2006"),
+			Rate:          money.FormatDecimal(r.Rate),
+		})
 	}
 	var codes []string
 	for _, c := range money.Supported() {
@@ -317,19 +348,25 @@ func pricesSubmit(deps Deps) http.HandlerFunc {
 
 func renderPrices(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
 	var rows []web.PriceRow
-	if ps, err := deps.Prices.List(req.Context()); err == nil {
-		for _, p := range ps {
-			rows = append(rows, web.PriceRow{
-				Symbol:        p.Symbol,
-				EffectiveDate: p.EffectiveDate.Format("02/01/2006"),
-				Price:         money.New(p.Price, p.Currency).Display(),
-			})
-		}
+	ps, err := deps.Prices.List(req.Context())
+	if err != nil {
+		logLoad(req, "prices list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, p := range ps {
+		rows = append(rows, web.PriceRow{
+			Symbol:        p.Symbol,
+			EffectiveDate: p.EffectiveDate.Format("02/01/2006"),
+			Price:         money.New(p.Price, p.Currency).Display(),
+		})
 	}
 	// A price applies to any security — the select is NOT currency-filtered (unlike
-	// the trade form). All securities are offered.
+	// the trade form). All securities are offered. The dropdown is secondary: a load
+	// failure degrades to an empty select (logged), it doesn't fail the page.
 	var securities []web.SecurityChoice
-	if secs, err := deps.Securities.List(req.Context()); err == nil {
+	if secs, sErr := deps.Securities.List(req.Context()); sErr != nil {
+		logLoad(req, "prices securities dropdown", sErr)
+	} else {
 		for _, s := range secs {
 			securities = append(securities, web.SecurityChoice{ID: s.ID, Symbol: s.Symbol})
 		}
@@ -426,17 +463,20 @@ func balanceLabel(t account.AccountType) string {
 
 func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, includeArchived bool, errMsg string, code int) {
 	var rows []web.AccountRow
-	if accts, err := deps.Accounts.List(req.Context(), includeArchived); err == nil {
-		for _, a := range accts {
-			rows = append(rows, web.AccountRow{
-				ID:           a.ID,
-				Name:         a.Name,
-				Type:         string(a.Type),
-				Currency:     string(a.Currency),
-				BalanceLabel: balanceLabel(a.Type),
-				Archived:     a.Archived,
-			})
-		}
+	accts, err := deps.Accounts.List(req.Context(), includeArchived)
+	if err != nil {
+		logLoad(req, "accounts list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, a := range accts {
+		rows = append(rows, web.AccountRow{
+			ID:           a.ID,
+			Name:         a.Name,
+			Type:         string(a.Type),
+			Currency:     string(a.Currency),
+			BalanceLabel: balanceLabel(a.Type),
+			Archived:     a.Archived,
+		})
 	}
 	types := []string{string(account.Cash), string(account.Credit), string(account.Investment)}
 	var codes []string
@@ -721,7 +761,14 @@ func readImportContent(req *http.Request) string {
 func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID int64, content string, res *importer.Result, errMsg string, code int) {
 	acct, err := deps.Accounts.Get(req.Context(), acctID)
 	if err != nil {
-		http.NotFound(w, req)
+		// A genuinely unknown id is a 404; a DB outage is a load error (500) — never
+		// let an outage masquerade as "not found".
+		if errors.Is(err, account.ErrNotFound) {
+			http.NotFound(w, req)
+			return
+		}
+		logLoad(req, "import account lookup", err)
+		renderError(deps, w, req, "accounts", loadErrorMsg)
 		return
 	}
 	var rows []web.ImportRow
@@ -754,11 +801,16 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 		catID, _ := strconv.ParseInt(req.URL.Query().Get("category"), 10, 64)
 		typ := transaction.TxType(req.URL.Query().Get("type"))
 
-		regRows, _ := deps.Transactions.Register(req.Context(), transaction.RegisterFilter{
+		regRows, rErr := deps.Transactions.Register(req.Context(), transaction.RegisterFilter{
 			AccountID:  acctID,
 			Type:       typ,
 			CategoryID: catID,
 		})
+		if rErr != nil {
+			logLoad(req, "transactions register", rErr)
+			renderError(deps, w, req, "transactions", loadErrorMsg)
+			return
+		}
 		rows := mapRegisterRows(regRows)
 
 		// HTMX filter change → swap just the rows.
@@ -768,15 +820,21 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 			return
 		}
 
+		// The filter dropdowns are secondary: a load failure degrades to an empty
+		// filter (logged), it does not fail the register page.
 		var accounts []web.FilterOption
-		if accts, err := deps.Accounts.List(req.Context(), true); err == nil {
+		if accts, err := deps.Accounts.List(req.Context(), true); err != nil {
+			logLoad(req, "register accounts filter", err)
+		} else {
 			for _, a := range accts {
 				accounts = append(accounts, web.FilterOption{ID: a.ID, Label: a.Name})
 			}
 		}
 		var cats []web.FilterOption
 		if deps.Categories != nil {
-			if cs, err := deps.Categories.List(req.Context()); err == nil {
+			if cs, err := deps.Categories.List(req.Context()); err != nil {
+				logLoad(req, "register categories filter", err)
+			} else {
 				for _, c := range cs {
 					cats = append(cats, web.FilterOption{ID: c.ID, Label: c.Name})
 				}
@@ -869,10 +927,13 @@ func categoriesDelete(deps Deps) http.HandlerFunc {
 
 func renderCategories(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
 	var rows []web.CategoryRow
-	if cs, err := deps.Categories.ListWithUsage(req.Context()); err == nil {
-		for _, c := range cs {
-			rows = append(rows, web.CategoryRow{ID: c.ID, Name: c.Name, Kind: string(c.Kind), Count: c.Count})
-		}
+	cs, err := deps.Categories.ListWithUsage(req.Context())
+	if err != nil {
+		logLoad(req, "categories list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, c := range cs {
+		rows = append(rows, web.CategoryRow{ID: c.ID, Name: c.Name, Kind: string(c.Kind), Count: c.Count})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
@@ -886,34 +947,44 @@ func categorySummary(deps Deps) http.HandlerFunc {
 			http.NotFound(w, req)
 			return
 		}
-		// Resolve the category name from the list (no single-Get on the iface).
+		// Resolve the category name from the list (no single-Get on the iface). A
+		// DB error here is a load failure (500), distinct from a genuinely unknown
+		// id (404) — never let an outage masquerade as "not found".
+		cs, err := deps.Categories.List(req.Context())
+		if err != nil {
+			logLoad(req, "category summary lookup", err)
+			renderError(deps, w, req, "settings", loadErrorMsg)
+			return
+		}
 		name := ""
 		var kind string
-		if cs, err := deps.Categories.List(req.Context()); err == nil {
-			for _, c := range cs {
-				if c.ID == id {
-					name, kind = c.Name, string(c.Kind)
-				}
+		for _, c := range cs {
+			if c.ID == id {
+				name, kind = c.Name, string(c.Kind)
 			}
 		}
 		if name == "" {
 			http.NotFound(w, req)
 			return
 		}
+		txns, sums, err := deps.Transactions.CategoryTransactions(req.Context(), id)
+		if err != nil {
+			logLoad(req, "category transactions", err)
+			renderError(deps, w, req, "settings", loadErrorMsg)
+			return
+		}
 		var rows []web.CategoryTxRow
 		var totals []string
-		if txns, sums, err := deps.Transactions.CategoryTransactions(req.Context(), id); err == nil {
-			for _, t := range txns {
-				rows = append(rows, web.CategoryTxRow{
-					Account:     t.AccountName,
-					Date:        t.Date.Format("02/01/2006"),
-					Description: t.Description,
-					Amount:      t.Amount.Display(),
-				})
-			}
-			for _, m := range sums {
-				totals = append(totals, m.Display())
-			}
+		for _, t := range txns {
+			rows = append(rows, web.CategoryTxRow{
+				Account:     t.AccountName,
+				Date:        t.Date.Format("02/01/2006"),
+				Description: t.Description,
+				Amount:      t.Amount.Display(),
+			})
+		}
+		for _, m := range sums {
+			totals = append(totals, m.Display())
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = web.CategorySummaryPage(shellData(deps, req.Context(), "settings"), name, kind, rows, totals).Render(req.Context(), w)
@@ -960,15 +1031,18 @@ func securityTypeLabel(t security.SecurityType) string {
 
 func renderSecurities(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
 	var rows []web.SecurityRow
-	if secs, err := deps.Securities.List(req.Context()); err == nil {
-		for _, s := range secs {
-			rows = append(rows, web.SecurityRow{
-				Symbol:        s.Symbol,
-				Name:          s.Name,
-				TypeLabel:     securityTypeLabel(s.Type),
-				QuoteCurrency: string(s.QuoteCurrency),
-			})
-		}
+	secs, err := deps.Securities.List(req.Context())
+	if err != nil {
+		logLoad(req, "securities list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, s := range secs {
+		rows = append(rows, web.SecurityRow{
+			Symbol:        s.Symbol,
+			Name:          s.Name,
+			TypeLabel:     securityTypeLabel(s.Type),
+			QuoteCurrency: string(s.QuoteCurrency),
+		})
 	}
 	types := []web.SecurityTypeOption{
 		{Value: string(security.Stock), Label: "Stock"},
@@ -1013,7 +1087,14 @@ func accountPath(id int64) string { return "/accounts/" + strconv.FormatInt(id, 
 func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, acctID, editID int64, errMsg string, code int) {
 	acct, err := deps.Accounts.Get(req.Context(), acctID)
 	if err != nil {
-		http.NotFound(w, req)
+		// A genuinely unknown id is a 404; a DB outage is a load error (500) — never
+		// let an outage masquerade as "not found".
+		if errors.Is(err, account.ErrNotFound) {
+			http.NotFound(w, req)
+			return
+		}
+		logLoad(req, "account detail lookup", err)
+		renderError(deps, w, req, "accounts", loadErrorMsg)
 		return
 	}
 	if account.AccountType(acct.Type) == account.Investment {
@@ -1025,18 +1106,25 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	// produced by domain (AD-10) — http only renders it.
 	balLabel := "Saldo"
 	balStr := ""
-	if bal, bErr := deps.Transactions.Balance(req.Context(), acctID); bErr == nil {
-		if account.AccountType(acct.Type) == account.Credit {
-			balLabel = "Saldo devedor"
-			balStr = domain.AmountOwed(bal).Display()
-		} else {
-			balStr = bal.Display()
-		}
+	bal, bErr := deps.Transactions.Balance(req.Context(), acctID)
+	if bErr != nil {
+		logLoad(req, "account balance", bErr)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else if account.AccountType(acct.Type) == account.Credit {
+		balLabel = "Saldo devedor"
+		balStr = domain.AmountOwed(bal).Display()
+	} else {
+		balStr = bal.Display()
 	}
 	var rows []web.TxRow
 	var edit web.TxRow
 	editing := false
-	if txns, lErr := deps.Transactions.List(req.Context(), acctID); lErr == nil {
+	txns, lErr := deps.Transactions.List(req.Context(), acctID)
+	if lErr != nil {
+		logLoad(req, "account transactions", lErr)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	{
 		for _, t := range txns {
 			sign := "-"
 			if t.Incoming {
@@ -1068,9 +1156,11 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 	}
 	types := []string{string(transaction.Income), string(transaction.Expense)}
 
-	// Transfer targets: the owner's other active accounts.
+	// Transfer targets: the owner's other active accounts (secondary — degrade).
 	var targets []web.TransferTarget
-	if accts, aErr := deps.Accounts.List(req.Context(), false); aErr == nil {
+	if accts, aErr := deps.Accounts.List(req.Context(), false); aErr != nil {
+		logLoad(req, "transfer targets", aErr)
+	} else {
 		for _, a := range accts {
 			if a.ID == acctID {
 				continue
@@ -1079,10 +1169,12 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 		}
 	}
 
-	// Category options for the income/expense form.
+	// Category options for the income/expense form (secondary — degrade).
 	var cats []web.CategoryOption
 	if deps.Categories != nil {
-		if cs, cErr := deps.Categories.List(req.Context()); cErr == nil {
+		if cs, cErr := deps.Categories.List(req.Context()); cErr != nil {
+			logLoad(req, "account detail categories", cErr)
+		} else {
 			for _, c := range cs {
 				cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
 			}
@@ -1100,7 +1192,10 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 // (no in-place edit), mirroring transfers.
 func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request, acct account.Account, errMsg string, code int) {
 	balStr := ""
-	if bal, bErr := deps.Transactions.Balance(req.Context(), acct.ID); bErr == nil {
+	if bal, bErr := deps.Transactions.Balance(req.Context(), acct.ID); bErr != nil {
+		logLoad(req, "investment balance", bErr)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
 		balStr = bal.Display()
 	}
 
@@ -1108,7 +1203,14 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 	realized := ""
 	oversold := false
 	if hs, rg, hErr := deps.Transactions.Holdings(req.Context(), acct.ID); hErr != nil {
-		oversold = errors.Is(hErr, transaction.ErrOversold)
+		// An oversold ledger is a specific, user-fixable state (shows its own hint);
+		// any other Holdings failure is a real load error, not "no holdings".
+		if errors.Is(hErr, transaction.ErrOversold) {
+			oversold = true
+		} else {
+			logLoad(req, "investment holdings", hErr)
+			errMsg, code = loadErrorMsg, http.StatusInternalServerError
+		}
 	} else {
 		for _, h := range hs {
 			row := web.HoldingRow{
@@ -1134,7 +1236,10 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 	}
 
 	var rows []web.TxRow
-	if txns, lErr := deps.Transactions.List(req.Context(), acct.ID); lErr == nil {
+	if txns, lErr := deps.Transactions.List(req.Context(), acct.ID); lErr != nil {
+		logLoad(req, "investment transactions", lErr)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
 		for _, t := range txns {
 			sign := "-"
 			if t.Incoming {
@@ -1155,9 +1260,11 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 		}
 	}
 
-	// Tradeable securities: same currency as the account (same-currency-only).
+	// Tradeable securities: same currency as the account (secondary — degrade).
 	var securities []web.SecurityChoice
-	if secs, sErr := deps.Securities.List(req.Context()); sErr == nil {
+	if secs, sErr := deps.Securities.List(req.Context()); sErr != nil {
+		logLoad(req, "investment securities dropdown", sErr)
+	} else {
 		for _, s := range secs {
 			if string(s.QuoteCurrency) == string(acct.Currency) {
 				securities = append(securities, web.SecurityChoice{ID: s.ID, Symbol: s.Symbol})
@@ -1578,7 +1685,11 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 func shellData(deps Deps, ctx context.Context, active string) web.ShellData {
 	dc := ""
 	if deps.Settings != nil {
-		if c, err := deps.Settings.DisplayCurrency(ctx); err == nil {
+		// The greeting currency is secondary on every page — a failure degrades to
+		// a blank currency (logged), never a 500 (that would take down all pages).
+		if c, err := deps.Settings.DisplayCurrency(ctx); err != nil {
+			log.Printf("http: shell display currency: %v", err)
+		} else {
 			dc = string(c)
 		}
 	}
@@ -1689,8 +1800,13 @@ func settingsForm(deps Deps) http.HandlerFunc {
 // renderSettings renders the Settings page with an optional notice (a success
 // confirmation or an error reason from a restore attempt).
 func renderSettings(deps Deps, w http.ResponseWriter, req *http.Request, notice string, isError bool, code int) {
+	// The currency list is secondary here: a failure degrades to an empty select
+	// (logged) rather than 500ing the whole Settings page — which also hosts the
+	// backup/restore recovery tools that must stay reachable.
 	var codes []string
-	if currs, err := deps.Settings.ListCurrencies(req.Context()); err == nil {
+	if currs, err := deps.Settings.ListCurrencies(req.Context()); err != nil {
+		logLoad(req, "settings currencies", err)
+	} else {
 		for _, c := range currs {
 			codes = append(codes, string(c))
 		}

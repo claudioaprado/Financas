@@ -61,7 +61,10 @@ func (s *stubSettings) ListCurrencies(context.Context) ([]money.Currency, error)
 }
 
 // stubExchangeRates is an in-memory ExchangeRates for handler tests.
-type stubExchangeRates struct{ rates []exchangerate.Rate }
+type stubExchangeRates struct {
+	rates   []exchangerate.Rate
+	listErr error
+}
 
 func (s *stubExchangeRates) Add(_ context.Context, from, to money.Currency, eff time.Time, rate decimal.Decimal) (exchangerate.Rate, error) {
 	if from == to {
@@ -78,12 +81,19 @@ func (s *stubExchangeRates) Add(_ context.Context, from, to money.Currency, eff 
 	return r, nil
 }
 
-func (s *stubExchangeRates) List(context.Context) ([]exchangerate.Rate, error) { return s.rates, nil }
+func (s *stubExchangeRates) List(context.Context) ([]exchangerate.Rate, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.rates, nil
+}
 
 // stubAccounts is an in-memory Accounts for handler tests.
 type stubAccounts struct {
-	accts  []account.Account
-	nextID int64
+	accts   []account.Account
+	nextID  int64
+	listErr error
+	getErr  error // a non-ErrNotFound failure (e.g. a DB outage) from Get
 }
 
 func (s *stubAccounts) Create(_ context.Context, name string, typ account.AccountType, cur money.Currency) (account.Account, error) {
@@ -128,6 +138,9 @@ func (s *stubAccounts) SetArchived(_ context.Context, id int64, archived bool) e
 }
 
 func (s *stubAccounts) Get(_ context.Context, id int64) (account.Account, error) {
+	if s.getErr != nil {
+		return account.Account{}, s.getErr
+	}
 	for _, a := range s.accts {
 		if a.ID == id {
 			return a, nil
@@ -137,6 +150,9 @@ func (s *stubAccounts) Get(_ context.Context, id int64) (account.Account, error)
 }
 
 func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.Account, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	out := []account.Account{}
 	for _, a := range s.accts {
 		if includeArchived || !a.Archived {
@@ -151,9 +167,11 @@ func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.
 // rows sharing an id (one per account), so List/Balance stay account-relative
 // exactly like the real service. Balances are computed in USD.
 type stubTransactions struct {
-	rows   []transaction.Transaction
-	nextID int64
-	held   map[int64]*stubHolding // by security id
+	rows        []transaction.Transaction
+	nextID      int64
+	held        map[int64]*stubHolding // by security id
+	listErr     error
+	registerErr error
 }
 
 type stubHolding struct {
@@ -345,6 +363,9 @@ func (s *stubTransactions) Balance(_ context.Context, accountID int64) (money.Mo
 }
 
 func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transaction.Transaction, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	out := []transaction.Transaction{}
 	for _, r := range s.rows {
 		if r.AccountID == accountID {
@@ -355,6 +376,9 @@ func (s *stubTransactions) List(_ context.Context, accountID int64) ([]transacti
 }
 
 func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error) {
+	if s.registerErr != nil {
+		return nil, s.registerErr
+	}
 	seen := map[int64]bool{}
 	var out []transaction.RegisterRow
 	for _, r := range s.rows {
@@ -396,9 +420,10 @@ func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFil
 
 // stubCategories is an in-memory Categories for handler tests.
 type stubCategories struct {
-	cats   []category.Category
-	usage  map[int64]int64
-	nextID int64
+	cats    []category.Category
+	usage   map[int64]int64
+	nextID  int64
+	listErr error
 }
 
 func (s *stubCategories) Create(_ context.Context, name string, kind category.Kind) (category.Category, error) {
@@ -414,9 +439,17 @@ func (s *stubCategories) Create(_ context.Context, name string, kind category.Ki
 	return c, nil
 }
 
-func (s *stubCategories) List(_ context.Context) ([]category.Category, error) { return s.cats, nil }
+func (s *stubCategories) List(_ context.Context) ([]category.Category, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.cats, nil
+}
 
 func (s *stubCategories) ListWithUsage(_ context.Context) ([]category.CategoryUsage, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	out := make([]category.CategoryUsage, 0, len(s.cats))
 	for _, c := range s.cats {
 		out = append(out, category.CategoryUsage{Category: c, Count: s.usage[c.ID]})
@@ -470,8 +503,9 @@ func stubImportResult(content string) importer.Result {
 // stubSecurities is an in-memory Securities for handler tests. It normalizes the
 // symbol and rejects duplicates case-insensitively, mirroring the real service.
 type stubSecurities struct {
-	secs   []security.Security
-	nextID int64
+	secs    []security.Security
+	nextID  int64
+	listErr error
 }
 
 func (s *stubSecurities) Create(_ context.Context, symbol, name string, typ security.SecurityType, quote money.Currency) (security.Security, error) {
@@ -500,13 +534,19 @@ func (s *stubSecurities) Create(_ context.Context, symbol, name string, typ secu
 	return sec, nil
 }
 
-func (s *stubSecurities) List(_ context.Context) ([]security.Security, error) { return s.secs, nil }
+func (s *stubSecurities) List(_ context.Context) ([]security.Security, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.secs, nil
+}
 
 // stubPrices is an in-memory Prices for handler tests. It rejects non-positive
 // prices, mirroring the real service.
 type stubPrices struct {
-	prices []price.Price
-	nextID int64
+	prices  []price.Price
+	nextID  int64
+	listErr error
 }
 
 func (s *stubPrices) Add(_ context.Context, securityID int64, effective time.Time, p decimal.Decimal) (price.Price, error) {
@@ -519,7 +559,12 @@ func (s *stubPrices) Add(_ context.Context, securityID int64, effective time.Tim
 	return row, nil
 }
 
-func (s *stubPrices) List(_ context.Context) ([]price.Price, error) { return s.prices, nil }
+func (s *stubPrices) List(_ context.Context) ([]price.Price, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.prices, nil
+}
 
 // stubValuation is an in-memory Valuation for handler tests. It returns a canned
 // Portfolio (or err when set).
@@ -2170,5 +2215,85 @@ func TestSettingsShowsRestoreFormAndNotice(t *testing.T) {
 	notice := authedGet(t, testDeps(true, nil), "/settings?restored=1")
 	if !strings.Contains(notice, "restaurados do backup") {
 		t.Error("settings page missing the restored success notice")
+	}
+}
+
+// --- Faxina: primary-load failures surface as HTTP 500 (not a misleading empty page) ---
+
+// authedGetRaw logs in and performs an authenticated GET, returning the recorder
+// without asserting a status (callers check the code themselves).
+func authedGetRaw(t *testing.T, deps Deps, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, path, nil), cookie))
+	return rec
+}
+
+func TestPrimaryLoadFailureReturns500(t *testing.T) {
+	boom := errors.New("db is down")
+	cases := []struct {
+		name string
+		path string
+		mut  func(d *Deps)
+	}{
+		{"accounts", "/accounts", func(d *Deps) { d.Accounts = &stubAccounts{listErr: boom} }},
+		{"prices", "/prices", func(d *Deps) { d.Prices = &stubPrices{listErr: boom} }},
+		{"exchange-rates", "/exchange-rates", func(d *Deps) { d.ExchangeRates = &stubExchangeRates{listErr: boom} }},
+		{"categories", "/categories", func(d *Deps) { d.Categories = &stubCategories{usage: map[int64]int64{}, listErr: boom} }},
+		{"securities", "/securities", func(d *Deps) { d.Securities = &stubSecurities{listErr: boom} }},
+		{"transactions register", "/transactions", func(d *Deps) { d.Transactions = &stubTransactions{registerErr: boom} }},
+		{"category summary", "/categories/1", func(d *Deps) {
+			d.Categories = &stubCategories{usage: map[int64]int64{}, listErr: boom}
+		}},
+		{"account detail list", "/accounts/1", func(d *Deps) {
+			d.Accounts = &stubAccounts{accts: []account.Account{{ID: 1, Name: "Carteira", Type: account.Cash, Currency: money.USD}}}
+			d.Transactions = &stubTransactions{listErr: boom}
+		}},
+		{"investment detail list", "/accounts/1", func(d *Deps) {
+			d.Accounts = &stubAccounts{accts: []account.Account{{ID: 1, Name: "Corretora", Type: account.Investment, Currency: money.USD}}}
+			d.Transactions = &stubTransactions{listErr: boom}
+		}},
+		{"account detail Get outage (not a 404)", "/accounts/1", func(d *Deps) {
+			d.Accounts = &stubAccounts{getErr: boom}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			deps := testDeps(true, nil)
+			c.mut(&deps)
+			rec := authedGetRaw(t, deps, c.path)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("%s with a load error = %d, want 500 (must not look like an empty 200)", c.path, rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "Não foi possível carregar") {
+				t.Errorf("%s 500 body should carry the load-error banner, got: %s", c.path, rec.Body.String())
+			}
+		})
+	}
+}
+
+// A secondary-load failure (a filter dropdown) must NOT fail the page — the
+// register still renders 200 with its rows even if the accounts filter errors.
+func TestSecondaryLoadFailureDegradesGracefully(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Accounts = &stubAccounts{listErr: errors.New("dropdown down")} // filter dropdown source
+	// Register itself succeeds (default stubTransactions), so the page must render.
+	rec := authedGetRaw(t, deps, "/transactions")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register with only a failing filter dropdown = %d, want 200 (graceful degrade)", rec.Code)
+	}
+}
+
+// A genuine 404 (unknown account) must stay a 404 — the load-error sweep must not
+// turn missing resources into 500s.
+func TestUnknownAccountStays404(t *testing.T) {
+	deps := testDeps(true, nil) // empty stubAccounts → Get returns ErrNotFound
+	rec := authedGetRaw(t, deps, "/accounts/999")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown account = %d, want 404", rec.Code)
 	}
 }
