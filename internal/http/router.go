@@ -261,7 +261,7 @@ func exchangeRatesSubmit(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.ExchangeRates.Add(req.Context(), from, to, effective, rate); err != nil {
-			renderExchangeRates(deps, w, req, "Não foi possível adicionar a taxa: "+err.Error(), http.StatusBadRequest)
+			renderExchangeRates(deps, w, req, problemMsg(req, "Não foi possível adicionar a taxa. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/exchange-rates", http.StatusSeeOther)
@@ -280,6 +280,114 @@ const loadErrorMsg = "Não foi possível carregar esta página agora. Tente nova
 // greeting) log and degrade gracefully so the rest of the page still works.
 func logLoad(req *http.Request, what string, err error) {
 	log.Printf("http: %s %s: %v", req.Method, what, err)
+}
+
+// problemMsg turns a service error into an owner-facing pt-BR message for a failed
+// mutation. A KNOWN validation sentinel maps to a specific, translated reason; an
+// unrecognized error (a database/driver failure) is logged server-side and yields
+// the caller's generic fallback — so the raw internal error is never shown to the
+// user (AD-1; deferred-work: raw err.Error() echo).
+func problemMsg(req *http.Request, fallback string, err error) string {
+	if msg, ok := knownErrMsg(err); ok {
+		return msg
+	}
+	log.Printf("http: %s %s: %v", req.Method, req.URL.Path, err)
+	return fallback
+}
+
+// knownErrMsg maps a service's exported validation sentinels to a pt-BR message.
+// The ok result is false for any other error (an infra failure), which the caller
+// must treat generically rather than surface.
+func knownErrMsg(err error) (string, bool) {
+	switch {
+	// account
+	case errors.Is(err, account.ErrEmptyName):
+		return "O nome da conta não pode ficar vazio.", true
+	case errors.Is(err, account.ErrInvalidType):
+		return "Tipo de conta inválido (caixa, crédito ou investimento).", true
+	case errors.Is(err, account.ErrUnsupportedCurrency):
+		return "Moeda não suportada.", true
+	case errors.Is(err, account.ErrNotFound):
+		return "Conta não encontrada.", true
+	// category
+	case errors.Is(err, category.ErrEmptyName):
+		return "O nome da categoria não pode ficar vazio.", true
+	case errors.Is(err, category.ErrInvalidKind):
+		return "O tipo deve ser receita ou despesa.", true
+	case errors.Is(err, category.ErrCategoryInUse):
+		return "Esta categoria está em uso por transações.", true
+	case errors.Is(err, category.ErrNotFound):
+		return "Categoria não encontrada.", true
+	// security
+	case errors.Is(err, security.ErrEmptySymbol):
+		return "O código do ativo não pode ficar vazio.", true
+	case errors.Is(err, security.ErrEmptyName):
+		return "O nome do ativo não pode ficar vazio.", true
+	case errors.Is(err, security.ErrInvalidType):
+		return "Tipo de ativo inválido (ação, ETF, fundo ou outro).", true
+	case errors.Is(err, security.ErrUnsupportedCurrency):
+		return "Moeda de cotação não suportada.", true
+	case errors.Is(err, security.ErrDuplicateSymbol):
+		return "Já existe um ativo com esse código.", true
+	case errors.Is(err, security.ErrNotFound):
+		return "Ativo não encontrado.", true
+	// price
+	case errors.Is(err, price.ErrSecurityNotFound):
+		return "Ativo não encontrado.", true
+	case errors.Is(err, price.ErrNonPositivePrice):
+		return "O preço deve ser positivo.", true
+	// exchange rate
+	case errors.Is(err, exchangerate.ErrUnsupportedCurrency):
+		return "Moeda não suportada.", true
+	case errors.Is(err, exchangerate.ErrSameCurrency):
+		return "As moedas de origem e destino devem ser diferentes.", true
+	case errors.Is(err, exchangerate.ErrNonPositiveRate):
+		return "A taxa deve ser positiva.", true
+	// importer
+	case errors.Is(err, importer.ErrAccountNotFound):
+		return "Conta não encontrada.", true
+	case errors.Is(err, importer.ErrUnsupportedAccountType):
+		return "A importação exige uma conta de caixa ou crédito.", true
+	// transaction
+	case errors.Is(err, transaction.ErrAccountNotFound):
+		return "Conta não encontrada.", true
+	case errors.Is(err, transaction.ErrUnsupportedAccountType):
+		return "Receitas e despesas exigem uma conta de caixa ou crédito.", true
+	case errors.Is(err, transaction.ErrInvalidType):
+		return "Tipo de transação inválido.", true
+	case errors.Is(err, transaction.ErrNonPositiveAmount):
+		return "O valor deve ser positivo.", true
+	case errors.Is(err, transaction.ErrTxNotFound):
+		return "Transação não encontrada.", true
+	case errors.Is(err, transaction.ErrSameAccount):
+		return "A origem e o destino da transferência devem ser diferentes.", true
+	case errors.Is(err, transaction.ErrSameCurrencyAmountMismatch):
+		return "Transferência na mesma moeda deve ter valores iguais.", true
+	case errors.Is(err, transaction.ErrCrossCurrencyToAmountRequired):
+		return "Transferência entre moedas precisa do valor de destino.", true
+	case errors.Is(err, transaction.ErrCategoryNotFound):
+		return "Categoria não encontrada.", true
+	case errors.Is(err, transaction.ErrCategoryKindMismatch):
+		return "O tipo da categoria deve combinar com o tipo da transação.", true
+	case errors.Is(err, transaction.ErrNotInvestmentAccount):
+		return "Compra, venda e dividendo exigem uma conta de investimento.", true
+	case errors.Is(err, transaction.ErrSecurityNotFound):
+		return "Ativo não encontrado.", true
+	case errors.Is(err, transaction.ErrTradeCurrencyMismatch):
+		return "A moeda de cotação do ativo deve ser igual à da conta.", true
+	case errors.Is(err, transaction.ErrNonPositiveQuantity):
+		return "A quantidade deve ser positiva.", true
+	case errors.Is(err, transaction.ErrNonPositivePrice):
+		return "O preço deve ser positivo.", true
+	case errors.Is(err, transaction.ErrNegativeFees):
+		return "As taxas não podem ser negativas.", true
+	case errors.Is(err, transaction.ErrNegativeProceeds):
+		return "As taxas excedem o valor bruto da venda.", true
+	case errors.Is(err, transaction.ErrOversold):
+		return "A venda excede a quantidade em carteira.", true
+	default:
+		return "", false
+	}
 }
 
 // renderError renders the generic error page (or an inline fragment for HTMX)
@@ -339,7 +447,7 @@ func pricesSubmit(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.Prices.Add(req.Context(), securityID, effective, price); err != nil {
-			renderPrices(deps, w, req, "Não foi possível adicionar o preço: "+err.Error(), http.StatusBadRequest)
+			renderPrices(deps, w, req, problemMsg(req, "Não foi possível adicionar o preço. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/prices", http.StatusSeeOther)
@@ -392,7 +500,7 @@ func accountsCreate(deps Deps) http.HandlerFunc {
 		typ := account.AccountType(req.PostFormValue("type"))
 		currency := money.Currency(req.PostFormValue("currency"))
 		if _, err := deps.Accounts.Create(req.Context(), name, typ, currency); err != nil {
-			renderAccounts(deps, w, req, false, "Não foi possível criar a conta: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, false, problemMsg(req, "Não foi possível criar a conta. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/accounts", http.StatusSeeOther)
@@ -411,7 +519,7 @@ func accountsRename(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := deps.Accounts.Rename(req.Context(), id, req.PostFormValue("name")); err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Não foi possível renomear a conta: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), problemMsg(req, "Não foi possível renomear a conta. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
@@ -431,7 +539,7 @@ func accountsArchive(deps Deps) http.HandlerFunc {
 		}
 		archived := req.PostFormValue("archived") == "true"
 		if err := deps.Accounts.SetArchived(req.Context(), id, archived); err != nil {
-			renderAccounts(deps, w, req, showArchived(req), "Não foi possível atualizar a conta: "+err.Error(), http.StatusBadRequest)
+			renderAccounts(deps, w, req, showArchived(req), problemMsg(req, "Não foi possível atualizar a conta. Tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountsRedirect(req), http.StatusSeeOther)
@@ -513,7 +621,7 @@ func txCreate(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.Transactions.Record(req.Context(), acctID, typ, amount, date, desc, catID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível adicionar a transação: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível adicionar a transação. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -538,7 +646,7 @@ func txEdit(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := deps.Transactions.Edit(req.Context(), acctID, txID, typ, amount, date, desc, catID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, txID, "Não foi possível salvar a transação: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, txID, problemMsg(req, "Não foi possível salvar a transação. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -558,7 +666,7 @@ func txDelete(deps Deps) http.HandlerFunc {
 			return
 		}
 		if err := deps.Transactions.Delete(req.Context(), txID); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível excluir a transação: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível excluir a transação. Tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -595,7 +703,7 @@ func txTransfer(deps Deps) http.HandlerFunc {
 			toAmount = parsed
 		}
 		if err := deps.Transactions.Transfer(req.Context(), acctID, toID, fromAmount, toAmount, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível transferir: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível transferir. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -615,7 +723,7 @@ func tradeBuy(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.Transactions.Buy(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar a compra: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível registrar a compra. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -635,7 +743,7 @@ func tradeSell(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.Transactions.Sell(req.Context(), acctID, secID, qty, price, fees, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar a venda: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível registrar a venda. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -661,7 +769,7 @@ func tradeDividend(deps Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := deps.Transactions.Dividend(req.Context(), acctID, secID, amount, date, req.PostFormValue("description")); err != nil {
-			renderAccountDetail(deps, w, req, acctID, 0, "Não foi possível registrar o dividendo: "+err.Error(), http.StatusBadRequest)
+			renderAccountDetail(deps, w, req, acctID, 0, problemMsg(req, "Não foi possível registrar o dividendo. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, accountPath(acctID), http.StatusSeeOther)
@@ -715,7 +823,7 @@ func importPreview(deps Deps) http.HandlerFunc {
 		content := readImportContent(req)
 		res, err := deps.Imports.Preview(req.Context(), acctID, content)
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, "Não foi possível ler a importação: "+err.Error(), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, content, nil, problemMsg(req, "Não foi possível ler a importação. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		renderImport(deps, w, req, acctID, content, &res, "", http.StatusOK)
@@ -736,7 +844,7 @@ func importCommit(deps Deps) http.HandlerFunc {
 		content := req.PostFormValue("content")
 		res, err := deps.Imports.Commit(req.Context(), acctID, content)
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, "Não foi possível importar: "+err.Error(), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, content, nil, problemMsg(req, "Não foi possível importar. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		_ = res
@@ -898,7 +1006,7 @@ func categoriesCreate(deps Deps) http.HandlerFunc {
 		name := req.PostFormValue("name")
 		kind := category.Kind(req.PostFormValue("kind"))
 		if _, err := deps.Categories.Create(req.Context(), name, kind); err != nil {
-			renderCategories(deps, w, req, "Não foi possível criar a categoria: "+err.Error(), http.StatusBadRequest)
+			renderCategories(deps, w, req, problemMsg(req, "Não foi possível criar a categoria. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/categories", http.StatusSeeOther)
@@ -918,7 +1026,7 @@ func categoriesDelete(deps Deps) http.HandlerFunc {
 		}
 		force := req.PostFormValue("force") == "true"
 		if err := deps.Categories.Delete(req.Context(), id, force); err != nil {
-			renderCategories(deps, w, req, "Não foi possível excluir a categoria: "+err.Error(), http.StatusBadRequest)
+			renderCategories(deps, w, req, problemMsg(req, "Não foi possível excluir a categoria. Tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/categories", http.StatusSeeOther)
@@ -1008,7 +1116,7 @@ func securitiesCreate(deps Deps) http.HandlerFunc {
 		typ := security.SecurityType(req.PostFormValue("type"))
 		quote := money.Currency(req.PostFormValue("quote_currency"))
 		if _, err := deps.Securities.Create(req.Context(), symbol, name, typ, quote); err != nil {
-			renderSecurities(deps, w, req, "Não foi possível adicionar o ativo: "+err.Error(), http.StatusBadRequest)
+			renderSecurities(deps, w, req, problemMsg(req, "Não foi possível adicionar o ativo. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/securities", http.StatusSeeOther)

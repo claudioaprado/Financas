@@ -68,13 +68,13 @@ type stubExchangeRates struct {
 
 func (s *stubExchangeRates) Add(_ context.Context, from, to money.Currency, eff time.Time, rate decimal.Decimal) (exchangerate.Rate, error) {
 	if from == to {
-		return exchangerate.Rate{}, errors.New("same currency")
+		return exchangerate.Rate{}, exchangerate.ErrSameCurrency
 	}
 	if !money.IsSupported(from) || !money.IsSupported(to) {
-		return exchangerate.Rate{}, errors.New("unsupported")
+		return exchangerate.Rate{}, exchangerate.ErrUnsupportedCurrency
 	}
 	if !rate.IsPositive() {
-		return exchangerate.Rate{}, errors.New("non-positive")
+		return exchangerate.Rate{}, exchangerate.ErrNonPositiveRate
 	}
 	r := exchangerate.Rate{ID: int64(len(s.rates) + 1), From: from, To: to, EffectiveDate: eff, Rate: rate}
 	s.rates = append(s.rates, r)
@@ -2295,5 +2295,75 @@ func TestUnknownAccountStays404(t *testing.T) {
 	rec := authedGetRaw(t, deps, "/accounts/999")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown account = %d, want 404", rec.Code)
+	}
+}
+
+// --- Faxina: validation sentinels → pt-BR; unknown errors → generic (no raw leak) ---
+
+func TestKnownErrMsgMapsSentinels(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{account.ErrEmptyName, "O nome da conta não pode ficar vazio."},
+		{account.ErrUnsupportedCurrency, "Moeda não suportada."},
+		{category.ErrCategoryInUse, "Esta categoria está em uso por transações."},
+		{security.ErrDuplicateSymbol, "Já existe um ativo com esse código."},
+		{exchangerate.ErrSameCurrency, "As moedas de origem e destino devem ser diferentes."},
+		{transaction.ErrOversold, "A venda excede a quantidade em carteira."},
+		{transaction.ErrTradeCurrencyMismatch, "A moeda de cotação do ativo deve ser igual à da conta."},
+		{importer.ErrAccountNotFound, "Conta não encontrada."},
+		{importer.ErrUnsupportedAccountType, "A importação exige uma conta de caixa ou crédito."},
+		{fmt.Errorf("wrapped: %w", transaction.ErrNonPositiveAmount), "O valor deve ser positivo."},
+	}
+	for _, c := range cases {
+		got, ok := knownErrMsg(c.err)
+		if !ok || got != c.want {
+			t.Errorf("knownErrMsg(%v) = (%q,%v), want (%q,true)", c.err, got, ok, c.want)
+		}
+	}
+	// An unknown/infra error is not classified.
+	if _, ok := knownErrMsg(errors.New("pq: connection refused")); ok {
+		t.Error("an unknown error must not be classified as a known sentinel")
+	}
+}
+
+func TestProblemMsgNeverLeaksRawError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/accounts", nil)
+	raw := errors.New("pq: duplicate key value violates unique constraint \"account_pkey\"")
+	got := problemMsg(req, "Não foi possível criar a conta. Verifique os dados e tente novamente.", raw)
+	if strings.Contains(got, "pq:") || strings.Contains(got, "constraint") {
+		t.Errorf("problemMsg leaked the raw error: %q", got)
+	}
+	if got != "Não foi possível criar a conta. Verifique os dados e tente novamente." {
+		t.Errorf("unknown error should yield the generic fallback, got %q", got)
+	}
+	// A known sentinel surfaces its specific pt-BR message instead of the fallback.
+	if got := problemMsg(req, "fallback", account.ErrEmptyName); got != "O nome da conta não pode ficar vazio." {
+		t.Errorf("known sentinel should map to its message, got %q", got)
+	}
+}
+
+// At the handler level, a real validation sentinel surfaces its pt-BR reason.
+func TestRateSameCurrencyShowsPtBRReason(t *testing.T) {
+	deps := testDeps(true, nil)
+	router := NewRouter(deps)
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	req := httptest.NewRequest(http.MethodPost, "/exchange-rates",
+		strings.NewReader("from=USD&to=USD&effective_date=2024-01-01&rate=5"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
+	req.Host = "example.com"
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(req, cookie))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("same-currency rate = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "moedas de origem e destino devem ser diferentes") {
+		t.Errorf("expected the pt-BR same-currency reason, body: %s", rec.Body.String())
 	}
 }
