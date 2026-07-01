@@ -96,7 +96,7 @@ type Transactions interface {
 	Buy(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
 	Sell(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
 	Dividend(ctx context.Context, accountID, securityID int64, amount decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
-	Holdings(ctx context.Context, accountID int64) ([]transaction.HoldingView, money.Money, error)
+	Holdings(ctx context.Context, accountID int64) ([]transaction.HoldingView, money.Money, []string, error)
 }
 
 // Categories creates, lists, and deletes income/expense categories. Defined here
@@ -1309,17 +1309,14 @@ func renderInvestmentDetail(deps Deps, w http.ResponseWriter, req *http.Request,
 
 	var holdings []web.HoldingRow
 	realized := ""
-	oversold := false
-	if hs, rg, hErr := deps.Transactions.Holdings(req.Context(), acct.ID); hErr != nil {
-		// An oversold ledger is a specific, user-fixable state (shows its own hint);
-		// any other Holdings failure is a real load error, not "no holdings".
-		if errors.Is(hErr, transaction.ErrOversold) {
-			oversold = true
-		} else {
-			logLoad(req, "investment holdings", hErr)
-			errMsg, code = loadErrorMsg, http.StatusInternalServerError
-		}
+	oversold := ""
+	if hs, rg, os, hErr := deps.Transactions.Holdings(req.Context(), acct.ID); hErr != nil {
+		logLoad(req, "investment holdings", hErr)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
 	} else {
+		// Inconsistent (oversold) positions are surfaced as a warning while the good
+		// holdings still render (per-security isolation).
+		oversold = strings.Join(os, ", ")
 		for _, h := range hs {
 			row := web.HoldingRow{
 				Symbol:       h.Symbol,
@@ -1396,13 +1393,9 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		d, err := deps.Valuation.Dashboard(req.Context())
 		if err != nil {
-			msg := "Não foi possível carregar seu painel agora. Tente novamente."
-			if errors.Is(err, valuation.ErrOversold) {
-				msg = "Uma venda excede a quantidade mantida em uma conta de investimento — corrija a operação para que seu painel possa ser avaliado."
-			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
-			_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), web.DashboardView{ErrMsg: msg}).Render(req.Context(), w)
+			_ = web.DashboardPage(shellData(deps, req.Context(), "dashboard"), web.DashboardView{ErrMsg: "Não foi possível carregar seu painel agora. Tente novamente."}).Render(req.Context(), w)
 			return
 		}
 
@@ -1423,6 +1416,9 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 		}
 		if len(d.Unpriced) > 0 {
 			view.UnpricedSymbols = strings.Join(d.Unpriced, ", ")
+		}
+		if len(d.Oversold) > 0 {
+			view.OversoldSymbols = strings.Join(d.Oversold, ", ")
 		}
 
 		// Value-over-time trend chart (Story 5.3). A series failure degrades to an
@@ -1730,13 +1726,9 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		p, err := deps.Valuation.Portfolio(req.Context())
 		if err != nil {
-			msg := "Não foi possível carregar sua carteira agora. Tente novamente."
-			if errors.Is(err, valuation.ErrOversold) {
-				msg = "Uma venda excede a quantidade mantida em uma conta de investimento — corrija a operação para que sua carteira possa ser avaliada."
-			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
-			_ = web.InvestmentsPage(shellData(deps, req.Context(), "investments"), web.InvestmentsView{ErrMsg: msg}).Render(req.Context(), w)
+			_ = web.InvestmentsPage(shellData(deps, req.Context(), "investments"), web.InvestmentsView{ErrMsg: "Não foi possível carregar sua carteira agora. Tente novamente."}).Render(req.Context(), w)
 			return
 		}
 
@@ -1761,6 +1753,9 @@ func investmentsPage(deps Deps) http.HandlerFunc {
 		}
 		if len(p.Unpriced) > 0 {
 			view.UnpricedSymbols = strings.Join(p.Unpriced, ", ")
+		}
+		if len(p.Oversold) > 0 {
+			view.OversoldSymbols = strings.Join(p.Oversold, ", ")
 		}
 		for _, h := range p.Holdings {
 			row := web.PortfolioHoldingRow{

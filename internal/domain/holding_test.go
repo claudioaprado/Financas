@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/claudioaprado/financas/internal/money"
@@ -35,9 +34,9 @@ func TestDeriveHoldings(t *testing.T) {
 		{SecurityID: sec, Type: "dividend", CashAmount: dec("40.00")},                                // no qty/basis change
 		{SecurityID: sec, Type: "sell", Quantity: dec("50"), Price: dec("15.00"), Fees: dec("3.00")}, // proceeds 747, basis_sold 551.25
 	}
-	hs, err := DeriveHoldings(usd, events)
-	if err != nil {
-		t.Fatalf("derive: %v", err)
+	hs, oversold := DeriveHoldings(usd, events)
+	if len(oversold) != 0 {
+		t.Fatalf("unexpected oversold: %v", oversold)
 	}
 	if len(hs) != 1 {
 		t.Fatalf("got %d holdings, want 1", len(hs))
@@ -60,9 +59,9 @@ func TestDeriveHoldings(t *testing.T) {
 
 	// Now sell the entire remaining 150 @ 16, fee 0 → exact wipe.
 	events = append(events, TradeEvent{SecurityID: sec, Type: "sell", Quantity: dec("150"), Price: dec("16.00"), Fees: dec("0")})
-	hs, err = DeriveHoldings(usd, events)
-	if err != nil {
-		t.Fatalf("derive after full sell: %v", err)
+	hs, oversold = DeriveHoldings(usd, events)
+	if len(oversold) != 0 {
+		t.Fatalf("unexpected oversold after full sell: %v", oversold)
 	}
 	h = hs[0]
 	if !h.Quantity.IsZero() {
@@ -86,17 +85,46 @@ func TestDeriveHoldingsOversold(t *testing.T) {
 		{SecurityID: sec, Type: "buy", Quantity: dec("10"), Price: dec("5"), Fees: dec("0")},
 		{SecurityID: sec, Type: "sell", Quantity: dec("11"), Price: dec("6"), Fees: dec("0")},
 	}
-	if _, err := DeriveHoldings(money.USD, events); !errors.Is(err, ErrOversold) {
-		t.Errorf("oversell err = %v, want ErrOversold", err)
+	// An oversold security is EXCLUDED from holdings and reported in the oversold
+	// slice (no error — the derivation stays partial, not blocked).
+	hs, oversold := DeriveHoldings(money.USD, events)
+	if len(hs) != 0 {
+		t.Errorf("oversold security should be excluded from holdings, got %+v", hs)
+	}
+	if len(oversold) != 1 || oversold[0] != sec {
+		t.Errorf("oversold = %v, want [%d]", oversold, sec)
+	}
+}
+
+// Per-security isolation (the point of this change): one oversold security must
+// not hide or block the others — the consistent positions still derive, and only
+// the broken id is reported.
+func TestDeriveHoldingsOversoldIsolatedPerSecurity(t *testing.T) {
+	const bad, good = int64(1), int64(2)
+	events := []TradeEvent{
+		{SecurityID: bad, Type: "buy", Quantity: dec("10"), Price: dec("5"), Fees: dec("0")},
+		{SecurityID: good, Type: "buy", Quantity: dec("4"), Price: dec("20"), Fees: dec("0")}, // basis 80
+		{SecurityID: bad, Type: "sell", Quantity: dec("11"), Price: dec("6"), Fees: dec("0")}, // oversell
+		{SecurityID: good, Type: "sell", Quantity: dec("1"), Price: dec("30"), Fees: dec("0")},
+	}
+	hs, oversold := DeriveHoldings(money.USD, events)
+	if len(oversold) != 1 || oversold[0] != bad {
+		t.Fatalf("oversold = %v, want [%d]", oversold, bad)
+	}
+	if len(hs) != 1 || hs[0].SecurityID != good {
+		t.Fatalf("holdings = %+v, want only the good security %d", hs, good)
+	}
+	if !hs[0].Quantity.Equal(dec("3")) { // 4 bought − 1 sold
+		t.Errorf("good qty = %s, want 3", hs[0].Quantity)
 	}
 }
 
 func TestDeriveHoldingsDividendOnly(t *testing.T) {
 	// A dividend with no buy: holding present but zero qty/basis, no realized gain.
 	events := []TradeEvent{{SecurityID: 3, Type: "dividend", CashAmount: dec("12.34")}}
-	hs, err := DeriveHoldings(money.BRL, events)
-	if err != nil {
-		t.Fatalf("derive: %v", err)
+	hs, oversold := DeriveHoldings(money.BRL, events)
+	if len(oversold) != 0 {
+		t.Fatalf("unexpected oversold: %v", oversold)
 	}
 	if len(hs) != 1 || !hs[0].Quantity.IsZero() || !hs[0].CostBasis.Amount().IsZero() || !hs[0].RealizedGain.Amount().IsZero() {
 		t.Errorf("dividend-only holding = %+v, want zero qty/basis/realized", hs)

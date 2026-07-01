@@ -406,7 +406,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("source balance: %v", err)
 	}
-	srcHoldings, srcRealized, err := transaction.New(poolA).Holdings(ctx, brokerID)
+	srcHoldings, srcRealized, _, err := transaction.New(poolA).Holdings(ctx, brokerID)
 	if err != nil {
 		t.Fatalf("source holdings: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 	if srcBal.String() != dstBal.String() {
 		t.Errorf("broker balance: src %s != dst %s", srcBal.String(), dstBal.String())
 	}
-	dstHoldings, dstRealized, err := transaction.New(poolB).Holdings(ctx, brokerID)
+	dstHoldings, dstRealized, _, err := transaction.New(poolB).Holdings(ctx, brokerID)
 	if err != nil {
 		t.Fatalf("dest holdings: %v", err)
 	}

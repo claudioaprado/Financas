@@ -35,6 +35,11 @@ templ DashboardPage(data ShellData, view DashboardView) {
 					Sem preço para <span class="font-medium">{ view.UnpricedSymbols }</span> — excluído do valor da carteira. <a href="/prices" class="text-accent hover:underline">Adicionar preços</a>
 				</p>
 			}
+			if view.OversoldSymbols != "" {
+				<p class="mt-3 rounded border border-loss/40 bg-loss/5 p-3 text-sm text-loss">
+					Uma venda excede a quantidade mantida em <span class="font-semibold">{ view.OversoldSymbols }</span> — essa posição foi excluída dos totais. Corrija a operação na conta de investimento para reconciliá-la.
+				</p>
+			}
 		}
 	}
 }
@@ -374,6 +379,11 @@ templ InvestmentsPage(data ShellData, v InvestmentsView) {
 				if v.UnpricedSymbols != "" {
 					<p class="mt-3 text-sm text-muted">
 						Sem preço para <span class="font-medium">{ v.UnpricedSymbols }</span> — excluído do valor da carteira. <a href="/prices" class="text-accent hover:underline">Adicionar preços</a>
+					</p>
+				}
+				if v.OversoldSymbols != "" {
+					<p class="mt-3 rounded border border-loss/40 bg-loss/5 p-3 text-sm text-loss">
+						Uma venda excede a quantidade mantida em <span class="font-semibold">{ v.OversoldSymbols }</span> — essa posição foi excluída dos totais. Corrija a operação na conta de investimento para reconciliá-la.
 					</p>
 				}
 				<h2 class="mt-6 text-sm font-semibold text-muted">Posições</h2>
@@ -738,7 +748,7 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 // balance, derived read-only holdings (average-cost), buy/sell/dividend forms, and
 // the account's investment transactions. Holdings are derived on read (AD-2);
 // trades are corrected via delete + re-add (no in-place edit), like transfers.
-templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, cashBalance, errMsg string, holdings []HoldingRow, realizedGain string, oversold bool, securities []SecurityChoice, txns []TxRow) {
+templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, cashBalance, errMsg string, holdings []HoldingRow, realizedGain string, oversold string, securities []SecurityChoice, txns []TxRow) {
 	@Shell(data) {
 		<section class="max-w-4xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href="/accounts" class="text-accent hover:underline">← Contas</a></p>
@@ -752,10 +762,10 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<h2 class="mt-6 text-sm font-semibold text-muted">Posições</h2>
-			if oversold {
-				<p class="mt-2 text-loss">Uma venda excede a quantidade mantida — exclua ou corrija a operação abaixo para que as posições possam ser calculadas.</p>
-			} else {
-				<table class="mt-2 w-full text-sm">
+			if oversold != "" {
+				<p class="mt-2 rounded border border-loss/40 bg-loss/5 p-3 text-sm text-loss">Uma venda excede a quantidade mantida em <span class="font-semibold">{ oversold }</span> — essa posição foi excluída dos totais. Exclua ou corrija a operação abaixo para reconciliá-la.</p>
+			}
+			<table class="mt-2 w-full text-sm">
 					<thead>
 						<tr class="text-left text-muted">
 							<th class="py-1">Ativo</th>
@@ -792,9 +802,8 @@ templ InvestmentAccountDetailPage(data ShellData, acctID int64, name, currency, 
 						}
 					</tbody>
 				</table>
-				if realizedGain != "" {
-					<p class="mt-2 text-sm text-muted">Ganho/perda realizado(a) acumulado(a): <span class="font-semibold">{ realizedGain }</span></p>
-				}
+			if realizedGain != "" {
+				<p class="mt-2 text-sm text-muted">Ganho/perda realizado(a) acumulado(a): <span class="font-semibold">{ realizedGain }</span></p>
 			}
 			if len(securities) == 0 {
 				<p class="mt-6 text-sm text-muted">Adicione um ativo em { currency } em <a href="/securities" class="text-accent hover:underline">Ativos</a> para negociar aqui.</p>

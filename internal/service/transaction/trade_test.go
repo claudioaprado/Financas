@@ -57,7 +57,7 @@ func TestInvestmentTrades(t *testing.T) {
 
 	assertHolding := func(label string, wantQty, wantBasis, wantRealized string) {
 		t.Helper()
-		views, realized, err := svc.Holdings(ctx, inv.ID)
+		views, realized, _, err := svc.Holdings(ctx, inv.ID)
 		if err != nil {
 			t.Fatalf("%s holdings: %v", label, err)
 		}
@@ -209,7 +209,7 @@ func TestBackdatedSellRejected(t *testing.T) {
 	if _, err := svc.Sell(ctx, inv.ID, sec.ID, req("10"), req("6"), req("0"), d(t, "2026-06-01"), "backdated"); !errors.Is(err, ErrOversold) {
 		t.Errorf("backdated sell = %v, want ErrOversold", err)
 	}
-	views, _, err := svc.Holdings(ctx, inv.ID)
+	views, _, _, err := svc.Holdings(ctx, inv.ID)
 	if err != nil {
 		t.Fatalf("holdings must still derive after a rejected backdated sell: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestHoldingValuation(t *testing.T) {
 
 	findHolding := func(label string) HoldingView {
 		t.Helper()
-		views, _, err := svc.Holdings(ctx, inv.ID)
+		views, _, _, err := svc.Holdings(ctx, inv.ID)
 		if err != nil {
 			t.Fatalf("%s holdings: %v", label, err)
 		}
@@ -307,5 +307,88 @@ func TestHoldingValuation(t *testing.T) {
 	}
 	if !v.PriceDate.Equal(date) {
 		t.Errorf("price date = %v, want %v", v.PriceDate, date)
+	}
+}
+
+// TestOversoldIsolatedPerSecurity proves the per-security isolation end to end
+// (the point of the change): when one security is made inconsistent (a buy
+// deleted out from under a later sell), the OTHER security's holding still
+// derives, is still sellable, and only the broken symbol is reported oversold —
+// the whole account is not hidden or blocked.
+func TestOversoldIsolatedPerSecurity(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	secs := security.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	date := d(t, "2026-06-01")
+
+	inv, err := accts.Create(ctx, fmt.Sprintf("Broker-%d", run), account.Investment, money.BRL)
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	good, err := secs.Create(ctx, fmt.Sprintf("GOOD%d", run), "Good Co", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("good security: %v", err)
+	}
+	bad, err := secs.Create(ctx, fmt.Sprintf("BAD%d", run), "Bad Co", security.Stock, money.BRL)
+	if err != nil {
+		t.Fatalf("bad security: %v", err)
+	}
+
+	if _, err := svc.Buy(ctx, inv.ID, good.ID, req("4"), req("20"), req("0"), date, "buy good"); err != nil {
+		t.Fatalf("buy good: %v", err)
+	}
+	badBuy, err := svc.Buy(ctx, inv.ID, bad.ID, req("10"), req("5"), req("0"), date, "buy bad")
+	if err != nil {
+		t.Fatalf("buy bad: %v", err)
+	}
+	if _, err := svc.Sell(ctx, inv.ID, bad.ID, req("4"), req("6"), req("0"), d(t, "2026-06-02"), "sell bad"); err != nil {
+		t.Fatalf("sell bad: %v", err)
+	}
+
+	// Break `bad`: delete its buy, leaving the later sell overselling it.
+	if err := svc.Delete(ctx, badBuy.ID); err != nil {
+		t.Fatalf("delete bad buy: %v", err)
+	}
+
+	// Holdings: the good position still derives; only `bad` is reported oversold.
+	views, _, oversold, err := svc.Holdings(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("holdings after breaking bad: %v", err)
+	}
+	if len(oversold) != 1 || oversold[0] != bad.Symbol {
+		t.Fatalf("oversold = %v, want [%s]", oversold, bad.Symbol)
+	}
+	foundGood := false
+	for _, v := range views {
+		if v.SecurityID == bad.ID {
+			t.Errorf("oversold security %s must be excluded from holdings", bad.Symbol)
+		}
+		if v.SecurityID == good.ID {
+			foundGood = true
+			if !v.Quantity.Equal(req("4")) {
+				t.Errorf("good qty = %s, want 4", v.Quantity)
+			}
+		}
+	}
+	if !foundGood {
+		t.Error("good holding should still derive despite the broken position")
+	}
+
+	// The good security is still sellable — a pre-existing inconsistency in `bad`
+	// must not block it.
+	if _, err := svc.Sell(ctx, inv.ID, good.ID, req("1"), req("30"), req("0"), d(t, "2026-06-03"), "sell good"); err != nil {
+		t.Fatalf("selling the good security should succeed, got: %v", err)
 	}
 }

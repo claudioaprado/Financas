@@ -172,6 +172,7 @@ type stubTransactions struct {
 	held        map[int64]*stubHolding // by security id
 	listErr     error
 	registerErr error
+	oversold    []string // symbols returned as inconsistent (oversold) by Holdings
 }
 
 type stubHolding struct {
@@ -237,7 +238,7 @@ func (s *stubTransactions) Dividend(_ context.Context, accountID, securityID int
 	return t, nil
 }
 
-func (s *stubTransactions) Holdings(_ context.Context, _ int64) ([]transaction.HoldingView, money.Money, error) {
+func (s *stubTransactions) Holdings(_ context.Context, _ int64) ([]transaction.HoldingView, money.Money, []string, error) {
 	realized := decimal.Zero
 	var out []transaction.HoldingView
 	for id, h := range s.held {
@@ -263,7 +264,7 @@ func (s *stubTransactions) Holdings(_ context.Context, _ int64) ([]transaction.H
 		}
 		out = append(out, view)
 	}
-	return out, money.New(realized, money.USD), nil
+	return out, money.New(realized, money.USD), s.oversold, nil
 }
 
 func (s *stubTransactions) Record(_ context.Context, accountID int64, typ transaction.TxType, amount decimal.Decimal, date time.Time, desc string, categoryID int64) (transaction.Transaction, error) {
@@ -990,7 +991,7 @@ func TestDashboardLossCardSingleMinus(t *testing.T) {
 
 func TestDashboardErrorBanner(t *testing.T) {
 	deps := testDeps(true, nil)
-	deps.Valuation = &stubValuation{err: valuation.ErrOversold}
+	deps.Valuation = &stubValuation{err: errors.New("db down")}
 	router := NewRouter(deps)
 	recLogin := httptest.NewRecorder()
 	router.ServeHTTP(recLogin, loginPost("owner", "right"))
@@ -999,10 +1000,25 @@ func TestDashboardErrorBanner(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/", nil), cookie))
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("dashboard (oversold) = %d, want 500", rec.Code)
+		t.Fatalf("dashboard (load error) = %d, want 500", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "venda excede a quantidade mantida") {
-		t.Errorf("dashboard error banner missing oversold hint")
+	if !strings.Contains(rec.Body.String(), "Não foi possível carregar seu painel") {
+		t.Errorf("dashboard error banner missing the load-error message")
+	}
+}
+
+// An oversold position is now a partial-total NOTICE, not a hard failure: the
+// dashboard still renders 200 with the KPIs and names the offending symbol.
+func TestDashboardOversoldIsANoticeNot500(t *testing.T) {
+	deps := testDeps(true, nil)
+	d := cannedDashboard()
+	d.Oversold = []string{"ACME"}
+	deps.Valuation = &stubValuation{portfolio: cannedPortfolio(), dashboard: d, series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()}
+	body := dashboardBody(t, deps, "/") // dashboardBody asserts 200
+	for _, want := range []string{"venda excede a quantidade mantida", "ACME", "Patrimônio líquido"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard oversold notice missing %q", want)
+		}
 	}
 }
 
@@ -2365,5 +2381,32 @@ func TestRateSameCurrencyShowsPtBRReason(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "moedas de origem e destino devem ser diferentes") {
 		t.Errorf("expected the pt-BR same-currency reason, body: %s", rec.Body.String())
+	}
+}
+
+// TestInvestmentDetailOversoldNotice (HTTP-level, LOW-3 from review): an oversold
+// position renders a warning naming the symbol AND still shows the good holdings —
+// a 200, never a whole-page block.
+func TestInvestmentDetailOversoldNotice(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Accounts = &stubAccounts{accts: []account.Account{
+		{ID: 1, Name: "Broker", Type: account.Investment, Currency: money.USD},
+	}}
+	deps.Transactions = &stubTransactions{
+		held: map[int64]*stubHolding{
+			2: {qty: decimal.RequireFromString("4"), basis: decimal.RequireFromString("80"), price: decimal.RequireFromString("30")},
+		},
+		oversold: []string{"BADSYM"},
+	}
+	body := authedGet(t, deps, "/accounts/1")
+	// The good holding still renders (S2), and the oversold symbol is named in a warning.
+	for _, want := range []string{"S2", "BADSYM", "venda excede a quantidade mantida"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("investment detail oversold view missing %q", want)
+		}
+	}
+	// It must NOT hide the holdings table behind a whole-page block.
+	if !strings.Contains(body, "Posições") {
+		t.Error("holdings section should still render alongside the oversold warning")
 	}
 }

@@ -31,11 +31,6 @@ import (
 	"github.com/claudioaprado/financas/internal/store"
 )
 
-// ErrOversold re-exports the domain error so the HTTP layer can warn on an
-// inconsistent ledger (a sell exceeding the quantity held) without importing
-// domain or service/transaction directly.
-var ErrOversold = domain.ErrOversold
-
 // HoldingValuation is one active (quantity > 0) holding valued in its native
 // currency (same-currency-only, so there is no FX at the per-holding level — FX
 // happens only in the cross-account Net Worth aggregation). The price-dependent
@@ -72,6 +67,7 @@ type Portfolio struct {
 	RealizedByCurrency []money.Money    // cumulative realized G/L per NATIVE currency
 	Missing            []money.Currency // currencies excluded from the totals (no rate)
 	Unpriced           []string         // symbols of held positions with no price
+	Oversold           []string         // symbols of inconsistent (oversold) positions, excluded from the totals
 	Display            money.Currency
 }
 
@@ -175,6 +171,7 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		allRealized []money.Money
 		holdings    []HoldingValuation
 		unpriced    []string
+		oversold    []string
 	)
 
 	for _, acct := range accounts {
@@ -192,12 +189,12 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		}
 
 		events := reverseEvents(eventsDesc[acct.ID])
-		derived, dErr := domain.DeriveHoldings(cur, events)
-		if errors.Is(dErr, domain.ErrOversold) {
-			return Portfolio{}, ErrOversold
-		}
-		if dErr != nil {
-			return Portfolio{}, fmt.Errorf("valuation: derive holdings: %w", dErr)
+		derived, oversoldIDs := domain.DeriveHoldings(cur, events)
+		// An inconsistent (oversold) position is excluded from `derived` and valued
+		// as a partial-total warning — never blocking the whole portfolio (mirrors
+		// the missing-rate / unpriced notices; per-security isolation).
+		for _, id := range oversoldIDs {
+			oversold = append(oversold, meta[id].symbol)
 		}
 		for _, h := range derived {
 			allRealized = append(allRealized, h.RealizedGain)
@@ -251,6 +248,7 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 		RealizedByCurrency: domain.SumByCurrency(allRealized),
 		Missing:            v.Missing,
 		Unpriced:           unpriced,
+		Oversold:           oversold,
 		Display:            display,
 	}, nil
 }
@@ -284,6 +282,7 @@ type Dashboard struct {
 	Display   money.Currency
 	Missing   []money.Currency
 	Unpriced  []string
+	Oversold  []string
 	PriorDate time.Time
 }
 
@@ -307,6 +306,7 @@ func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 		Display:   cur.Display,
 		Missing:   cur.Missing,
 		Unpriced:  cur.Unpriced,
+		Oversold:  cur.Oversold,
 	}
 
 	prior, ok, err := s.priorSampleDate(ctx, now)
@@ -422,7 +422,8 @@ type SeriesPoint struct {
 // repriced at today's rate). A zero `from` means "all history" (start at the
 // earliest sample). Points are de-duplicated by date and sorted ascending. With
 // no history the series may have a single point (today); callers decide a line
-// needs ≥2. ErrOversold is propagated like Portfolio.
+// needs ≥2. Oversold positions are excluded and surfaced via Portfolio.Oversold
+// (a partial total, never an error).
 func (s *Service) ValueSeries(ctx context.Context, from time.Time) ([]SeriesPoint, error) {
 	now := time.Now()
 	today := dateOnlyUTC(now)
@@ -466,7 +467,7 @@ func (s *Service) ValueSeries(ctx context.Context, from time.Time) ([]SeriesPoin
 	for _, d := range dates {
 		p, err := s.portfolioAsOf(ctx, d)
 		if err != nil {
-			return nil, err // ErrOversold and read failures bubble up
+			return nil, err // read failures bubble up (oversold is a partial-total warning, not an error)
 		}
 		points = append(points, SeriesPoint{
 			Date:    d,
@@ -522,12 +523,13 @@ func AllocBy(by string) string {
 // rates Net Worth used (effective today), then delegates the grouping +
 // 100%-reconciliation to the canonical domain.Allocate (AD-10). Because the rates
 // and the convert-then-sum/round-once policy match Net Worth's, Total equals
-// Portfolio().PortfolioValue (D4). ErrOversold propagates via Portfolio.
+// Portfolio().PortfolioValue (D4). Oversold positions are excluded and surfaced
+// via Portfolio.Oversold (a partial total, never an error).
 func (s *Service) Allocation(ctx context.Context, by string) (Allocation, error) {
 	by = AllocBy(by)
 	p, err := s.Portfolio(ctx)
 	if err != nil {
-		return Allocation{}, err // ErrOversold and read failures bubble up
+		return Allocation{}, err // read failures bubble up (oversold is a partial-total warning, not an error)
 	}
 
 	items := make([]domain.AllocItem, 0, len(p.Holdings))
@@ -584,7 +586,8 @@ type Insight struct {
 // portfolio valued AS OF now vs AS OF the first of the current month (UTC),
 // reconciled by the canonical domain.PercentChange (AD-10) — the same %-change
 // home the KPI deltas use. It reuses the portfolioAsOf as-of seam (AD-11, no
-// snapshot table). ErrOversold propagates like Portfolio/Dashboard.
+// snapshot table). Oversold positions are excluded and surfaced via Portfolio.Oversold
+// (a partial total, never an error).
 func (s *Service) Insight(ctx context.Context) (Insight, error) {
 	now := time.Now()
 	cur, err := s.portfolioAsOf(ctx, now)

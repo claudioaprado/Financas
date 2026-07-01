@@ -1,19 +1,12 @@
 package domain
 
 import (
-	"errors"
 	"sort"
 
 	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/internal/money"
 )
-
-// ErrOversold means a sell's quantity exceeds the quantity held at that point in
-// the chronological fold — a data inconsistency (e.g. a buy was deleted out from
-// under a later sell). The Sell use-case guards against creating one; this guards
-// the derivation itself (AD-2: the ledger is truth, correctness is on read).
-var ErrOversold = errors.New("domain: sell exceeds holdings")
 
 // TradeEvent is the holding-relevant projection of one investment ledger row,
 // in the account's (== security's) native currency. Events MUST be passed
@@ -73,12 +66,21 @@ func BasisSold(qtySold, qtyHeld, basisBefore decimal.Decimal) decimal.Decimal {
 // sell removes the proportional basis via BasisSold and accrues realized gain
 // (proceeds = quantity×price − fees, fees reduce proceeds not basis); a dividend
 // touches neither quantity nor basis (it is cash income, handled by
-// AccountBalance). A sell exceeding the held quantity returns ErrOversold.
+// AccountBalance).
 //
-// Zero-quantity holdings are retained in the result (their realized gain is kept)
-// so callers can surface cumulative realized G/L; callers hide qty==0 rows from
-// the active-positions list. Results are ordered by security id.
-func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, error) {
+// A sell exceeding the held quantity marks that security OVERSOLD — an
+// inconsistent position (e.g. a buy was deleted under a later sell). The
+// oversold security is EXCLUDED from the returned holdings and its id is returned
+// in the (sorted) second result, so one broken position never hides or blocks the
+// others (per-security isolation; the ledger is truth, correctness is on read).
+// Once a security is oversold its remaining events are ignored — none of its
+// derived figures can be trusted, so callers exclude it from valuation and warn.
+//
+// Zero-quantity (closed) holdings are retained in the result (their realized gain
+// is kept) so callers can surface cumulative realized G/L; callers hide qty==0
+// rows from the active-positions list. Holdings and oversold ids are ordered by
+// security id.
+func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, []int64) {
 	type acc struct {
 		qty      decimal.Decimal
 		basis    decimal.Decimal
@@ -86,6 +88,7 @@ func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, er
 	}
 	bySecurity := make(map[int64]*acc)
 	order := make([]int64, 0)
+	oversold := make(map[int64]bool)
 	get := func(id int64) *acc {
 		a, ok := bySecurity[id]
 		if !ok {
@@ -97,6 +100,9 @@ func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, er
 	}
 
 	for _, e := range events {
+		if oversold[e.SecurityID] {
+			continue // security already inconsistent; ignore its remaining events
+		}
 		switch e.Type {
 		case "buy":
 			a := get(e.SecurityID)
@@ -105,7 +111,8 @@ func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, er
 		case "sell":
 			a := get(e.SecurityID)
 			if e.Quantity.GreaterThan(a.qty) {
-				return nil, ErrOversold
+				oversold[e.SecurityID] = true
+				continue
 			}
 			bs := BasisSold(e.Quantity, a.qty, a.basis)
 			proceeds := e.Quantity.Mul(e.Price).Sub(e.Fees)
@@ -119,9 +126,18 @@ func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, er
 		}
 	}
 
+	oversoldIDs := make([]int64, 0, len(oversold))
+	for id := range oversold {
+		oversoldIDs = append(oversoldIDs, id)
+	}
+	sort.Slice(oversoldIDs, func(i, j int) bool { return oversoldIDs[i] < oversoldIDs[j] })
+
 	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
 	out := make([]Holding, 0, len(order))
 	for _, id := range order {
+		if oversold[id] {
+			continue // inconsistent position — excluded from holdings (reported via oversoldIDs)
+		}
 		a := bySecurity[id]
 		out = append(out, Holding{
 			SecurityID:   id,
@@ -130,5 +146,5 @@ func DeriveHoldings(currency money.Currency, events []TradeEvent) ([]Holding, er
 			RealizedGain: money.New(a.realized, currency),
 		})
 	}
-	return out, nil
+	return out, oversoldIDs
 }

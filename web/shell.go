@@ -200,6 +200,7 @@ type DashboardView struct {
 	Recent          []RegisterRow
 	MissingCodes    string
 	UnpricedSymbols string
+	OversoldSymbols string // joined symbols of inconsistent (oversold) positions, excluded from totals; empty when none
 	ErrMsg          string
 }
 
@@ -287,6 +288,7 @@ type InvestmentsView struct {
 	Realized        []RealizedChip // cumulative realized G/L, one chip per native currency
 	MissingCodes    string         // joined codes excluded from the totals (no rate); empty when none
 	UnpricedSymbols string         // joined held symbols with no price; empty when none
+	OversoldSymbols string         // joined symbols of inconsistent (oversold) positions, excluded from totals; empty when none
 	Holdings        []PortfolioHoldingRow
 	ErrMsg          string // when set, the page renders only this error banner
 }

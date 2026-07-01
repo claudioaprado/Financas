@@ -75,7 +75,8 @@ var (
 	ErrNonPositivePrice      = errors.New("transaction: price must be positive")
 	ErrNegativeFees          = errors.New("transaction: fees must not be negative")
 	ErrNegativeProceeds      = errors.New("transaction: fees exceed gross proceeds")
-	// ErrOversold means a sell exceeds the quantity held (domain.ErrOversold).
+	// ErrOversold rejects a Sell whose security would go negative at any
+	// chronological point (the per-security oversell guard).
 	ErrOversold = errors.New("transaction: sell exceeds holdings")
 )
 
@@ -394,13 +395,21 @@ func (s *Service) Sell(ctx context.Context, accountID, securityID int64, quantit
 		return Transaction{}, fmt.Errorf("transaction: insert sell: %w", err)
 	}
 	// Oversell guard: re-derive the resulting ledger ON THIS SAME TX. If inserting
-	// this sell makes any position go negative at any chronological point — an
-	// oversell, a back-dated sell, or a same-date sell recorded before its buy —
-	// DeriveHoldings returns ErrOversold and the deferred Rollback undoes the
-	// insert. This makes the guard identical to the read derivation and atomic
+	// this sell makes THIS security's position go negative at any chronological
+	// point — an oversell, a back-dated sell, or a same-date sell recorded before
+	// its buy — the security is reported oversold and the deferred Rollback undoes
+	// the insert. This makes the guard identical to the read derivation and atomic
 	// (no TOCTOU; exact NUMERIC(28,10) compare, no epsilon — Epic 4 decision).
-	if _, _, derr := s.deriveHoldings(ctx, q, accountID); derr != nil {
+	// Per-security: a pre-existing inconsistency in another holding never blocks
+	// this sell.
+	_, _, oversold, derr := s.deriveHoldings(ctx, q, accountID)
+	if derr != nil {
 		return Transaction{}, derr
+	}
+	for _, id := range oversold {
+		if id == securityID {
+			return Transaction{}, ErrOversold
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Transaction{}, fmt.Errorf("transaction: commit: %w", err)
@@ -477,18 +486,20 @@ type HoldingView struct {
 
 // Holdings derives the account's active holdings (quantity > 0) plus the
 // cumulative realized Gain/Loss across all positions (including closed ones), in
-// the account's native currency (AD-2/AD-10). It surfaces domain.ErrOversold when
-// the ledger is inconsistent (e.g. a buy was deleted under a later sell).
-func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView, money.Money, error) {
+// the account's native currency (AD-2/AD-10). Any inconsistent (oversold)
+// position — e.g. a buy deleted under a later sell — is excluded from the
+// holdings and its symbol returned in the third result, so one broken position
+// never hides the others (per-security isolation); callers show a warning.
+func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView, money.Money, []string, error) {
 	q := store.New(s.pool)
-	acct, holdings, err := s.deriveHoldings(ctx, q, accountID)
+	acct, holdings, oversold, err := s.deriveHoldings(ctx, q, accountID)
 	if err != nil {
-		return nil, money.Money{}, err
+		return nil, money.Money{}, nil, err
 	}
 	cur := money.Currency(acct.Currency)
 	meta, err := securityMeta(ctx, q)
 	if err != nil {
-		return nil, money.Money{}, err
+		return nil, money.Money{}, nil, err
 	}
 	// Latest price (effective <= today) per security, for market value /
 	// unrealized gain (Story 4.3). Read directly from the store (store-not-service,
@@ -497,7 +508,7 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 	// is Story 4.4).
 	latest, err := q.LatestPrices(ctx, time.Now())
 	if err != nil {
-		return nil, money.Money{}, fmt.Errorf("transaction: latest prices: %w", err)
+		return nil, money.Money{}, nil, fmt.Errorf("transaction: latest prices: %w", err)
 	}
 	prices := make(map[int64]store.LatestPricesRow, len(latest))
 	for _, p := range latest {
@@ -530,7 +541,13 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 		}
 		views = append(views, view)
 	}
-	return views, money.New(realized, cur), nil
+	// Symbols of any inconsistent (oversold) positions, for a partial-total warning
+	// — the good holdings above still render (per-security isolation).
+	oversoldSymbols := make([]string, 0, len(oversold))
+	for _, id := range oversold {
+		oversoldSymbols = append(oversoldSymbols, meta[id].symbol)
+	}
+	return views, money.New(realized, cur), oversoldSymbols, nil
 }
 
 // deriveHoldings loads the account and folds its investment ledger rows
@@ -538,17 +555,17 @@ func (s *Service) Holdings(ctx context.Context, accountID int64) ([]HoldingView,
 // behind both Holdings and the Sell oversell guard. The caller passes the queries
 // handle so the Sell guard can re-derive on the SAME transaction as its insert
 // (making the guard identical to the read derivation, and atomic).
-func (s *Service) deriveHoldings(ctx context.Context, q *store.Queries, accountID int64) (store.Account, []domain.Holding, error) {
+func (s *Service) deriveHoldings(ctx context.Context, q *store.Queries, accountID int64) (store.Account, []domain.Holding, []int64, error) {
 	acct, err := q.GetAccount(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return store.Account{}, nil, ErrAccountNotFound
+		return store.Account{}, nil, nil, ErrAccountNotFound
 	}
 	if err != nil {
-		return store.Account{}, nil, fmt.Errorf("transaction: get account: %w", err)
+		return store.Account{}, nil, nil, fmt.Errorf("transaction: get account: %w", err)
 	}
 	rows, err := q.ListAccountTransactions(ctx, idParam(accountID))
 	if err != nil {
-		return store.Account{}, nil, fmt.Errorf("transaction: list: %w", err)
+		return store.Account{}, nil, nil, fmt.Errorf("transaction: list: %w", err)
 	}
 	// ListAccountTransactions is occurred_on DESC, id DESC; reverse to get the
 	// chronological (ASC) order the average-cost fold requires.
@@ -568,14 +585,8 @@ func (s *Service) deriveHoldings(ctx context.Context, q *store.Queries, accountI
 			CashAmount: r.ToAmount,
 		})
 	}
-	holdings, err := domain.DeriveHoldings(money.Currency(acct.Currency), events)
-	if errors.Is(err, domain.ErrOversold) {
-		return store.Account{}, nil, ErrOversold
-	}
-	if err != nil {
-		return store.Account{}, nil, fmt.Errorf("transaction: derive holdings: %w", err)
-	}
-	return acct, holdings, nil
+	holdings, oversold := domain.DeriveHoldings(money.Currency(acct.Currency), events)
+	return acct, holdings, oversold, nil
 }
 
 // secMeta is a security's display fields.
