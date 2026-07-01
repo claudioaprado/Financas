@@ -28,6 +28,7 @@ import (
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/backup"
+	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
@@ -117,6 +118,14 @@ type CategoryRules interface {
 	Delete(ctx context.Context, id int64) error
 }
 
+// Budgets sets, lists, and deletes monthly category budget targets (Story 8.1 /
+// FR-18). Defined here (consumer side) and implemented by service/budget.
+type Budgets interface {
+	List(ctx context.Context) ([]budget.Budget, error)
+	Set(ctx context.Context, categoryID int64, amount decimal.Decimal) error
+	Delete(ctx context.Context, categoryID int64) error
+}
+
 // Securities creates and lists the owner's securities. Defined here (consumer
 // side) and implemented by service/security.
 type Securities interface {
@@ -164,6 +173,7 @@ type Deps struct {
 	Transactions  Transactions
 	Categories    Categories
 	CategoryRules CategoryRules
+	Budgets       Budgets
 	Securities    Securities
 	Imports       Imports
 	Valuation     Valuation
@@ -238,6 +248,9 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories/rules", rulesPage(deps))
 		pr.Post("/categories/rules", rulesCreate(deps))
 		pr.Post("/categories/rules/delete", rulesDelete(deps))
+		pr.Get("/budgets", budgetsPage(deps))
+		pr.Post("/budgets", budgetsSet(deps))
+		pr.Post("/budgets/delete", budgetsDelete(deps))
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
@@ -340,6 +353,13 @@ func knownErrMsg(err error) (string, bool) {
 		return "Categoria não encontrada.", true
 	case errors.Is(err, categoryrule.ErrNotFound):
 		return "Regra não encontrada.", true
+	// budget
+	case errors.Is(err, budget.ErrNonPositiveAmount):
+		return "O valor do orçamento deve ser maior que zero.", true
+	case errors.Is(err, budget.ErrCategoryNotFound):
+		return "Categoria não encontrada.", true
+	case errors.Is(err, budget.ErrNotFound):
+		return "Orçamento não encontrado.", true
 	// security
 	case errors.Is(err, security.ErrEmptySymbol):
 		return "O código do ativo não pode ficar vazio.", true
@@ -1195,6 +1215,91 @@ func renderRules(deps Deps, w http.ResponseWriter, req *http.Request, errMsg str
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.CategoryRulesPage(shellData(deps, req.Context(), "settings"), cats, rules, errMsg).Render(req.Context(), w)
+}
+
+func budgetsPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderBudgets(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func budgetsSet(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		categoryID, idErr := strconv.ParseInt(req.PostFormValue("category_id"), 10, 64)
+		amount, amtErr := money.ParseDecimal(req.PostFormValue("amount"))
+		if idErr != nil || amtErr != nil {
+			renderBudgets(deps, w, req, "Informe uma categoria e um valor válidos.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Budgets.Set(req.Context(), categoryID, amount); err != nil {
+			renderBudgets(deps, w, req, problemMsg(req, "Não foi possível salvar o orçamento. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/budgets", http.StatusSeeOther)
+	}
+}
+
+func budgetsDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		categoryID, err := strconv.ParseInt(req.PostFormValue("category_id"), 10, 64)
+		if err != nil {
+			renderBudgets(deps, w, req, "ID de categoria inválido.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Budgets.Delete(req.Context(), categoryID); err != nil {
+			renderBudgets(deps, w, req, problemMsg(req, "Não foi possível remover o orçamento. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/budgets", http.StatusSeeOther)
+	}
+}
+
+func renderBudgets(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	// The target is stored as a bare decimal interpreted in the Display Currency;
+	// render it in that currency. A currency-load failure is a load failure — and
+	// without the currency we must not format rows (they would render a blank
+	// code), so the budget list is left empty behind the error banner.
+	cur, err := deps.Settings.DisplayCurrency(req.Context())
+	if err != nil {
+		logLoad(req, "budgets display currency", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	var cats []web.CategoryOption
+	if cs, err := deps.Categories.List(req.Context()); err != nil {
+		logLoad(req, "budgets categories list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
+		for _, c := range cs {
+			cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
+		}
+	}
+	var budgets []web.BudgetRow
+	if cur != "" {
+		if bs, err := deps.Budgets.List(req.Context()); err != nil {
+			logLoad(req, "budgets list", err)
+			errMsg, code = loadErrorMsg, http.StatusInternalServerError
+		} else {
+			for _, b := range bs {
+				budgets = append(budgets, web.BudgetRow{
+					CategoryID:   b.CategoryID,
+					CategoryName: b.CategoryName,
+					Kind:         b.Kind,
+					Target:       money.New(b.Amount, cur).Display(),
+				})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.BudgetsPage(shellData(deps, req.Context(), "settings"), cats, budgets, string(cur), errMsg).Render(req.Context(), w)
 }
 
 func categorySummary(deps Deps) http.HandlerFunc {

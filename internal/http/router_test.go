@@ -20,6 +20,7 @@ import (
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/backup"
+	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
@@ -536,6 +537,43 @@ func (s *stubCategoryRules) Delete(_ context.Context, id int64) error {
 	return categoryrule.ErrNotFound
 }
 
+// stubBudgets is an in-memory Budgets for handler tests.
+type stubBudgets struct {
+	budgets []budget.Budget
+	listErr error
+}
+
+func (s *stubBudgets) List(_ context.Context) ([]budget.Budget, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.budgets, nil
+}
+
+func (s *stubBudgets) Set(_ context.Context, categoryID int64, amount decimal.Decimal) error {
+	if amount.Sign() <= 0 {
+		return budget.ErrNonPositiveAmount
+	}
+	for i := range s.budgets {
+		if s.budgets[i].CategoryID == categoryID {
+			s.budgets[i].Amount = amount
+			return nil
+		}
+	}
+	s.budgets = append(s.budgets, budget.Budget{CategoryID: categoryID, CategoryName: "Cat", Kind: "expense", Amount: amount})
+	return nil
+}
+
+func (s *stubBudgets) Delete(_ context.Context, categoryID int64) error {
+	for i := range s.budgets {
+		if s.budgets[i].CategoryID == categoryID {
+			s.budgets = append(s.budgets[:i], s.budgets[i+1:]...)
+			return nil
+		}
+	}
+	return budget.ErrNotFound
+}
+
 func stubImportResult(content string) importer.Result {
 	res := importer.Result{AccountName: "Acc", Currency: "USD"}
 	for _, p := range importer.Parse(content) {
@@ -822,6 +860,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Transactions:  &stubTransactions{},
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		CategoryRules: &stubCategoryRules{},
+		Budgets:       &stubBudgets{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
@@ -1882,6 +1921,7 @@ func TestHoldingValuationColumns(t *testing.T) {
 		Transactions:  txs,
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		CategoryRules: &stubCategoryRules{},
+		Budgets:       &stubBudgets{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
@@ -2153,6 +2193,73 @@ func TestCategoryRulesPage(t *testing.T) {
 	router.ServeHTTP(recDel, withCookie(del, cookie))
 	if recDel.Code != http.StatusSeeOther || len(rules.rules) != 0 {
 		t.Fatalf("delete rule = %d, rules = %+v", recDel.Code, rules.rules)
+	}
+}
+
+// TestBudgetsPage exercises the /budgets set/list/delete flow (Story 8.1): auth
+// gate, page render with the category option, setting a target (formatted in the
+// Display Currency), rejecting a non-positive amount, and removing a target.
+func TestBudgetsPage(t *testing.T) {
+	deps := testDeps(true, nil)
+	deps.Settings = &stubSettings{current: money.BRL}
+	cats := &stubCategories{usage: map[int64]int64{}}
+	_, _ = cats.Create(context.Background(), "Food", category.Expense)
+	deps.Categories = cats
+	budgets := &stubBudgets{}
+	deps.Budgets = budgets
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/budgets", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth budgets = %d, want 303", recUnauth.Code)
+	}
+
+	// Page renders with the heading and the currency hint.
+	recForm := httptest.NewRecorder()
+	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/budgets", nil), cookie))
+	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Orçamento mensal") {
+		t.Fatalf("budgets page = %d, missing heading", recForm.Code)
+	}
+
+	// Set a target using a Brazilian-format amount.
+	recSet := httptest.NewRecorder()
+	set := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader("category_id=1&amount=1.234,56"))
+	set.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recSet, withCookie(set, cookie))
+	if recSet.Code != http.StatusSeeOther || len(budgets.budgets) != 1 ||
+		!budgets.budgets[0].Amount.Equal(decimal.RequireFromString("1234.56")) {
+		t.Fatalf("set budget = %d, budgets = %+v", recSet.Code, budgets.budgets)
+	}
+
+	// The list renders the target formatted in the Display Currency.
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/budgets", nil), cookie))
+	if !strings.Contains(recList.Body.String(), "1.234,56 BRL") {
+		t.Fatalf("budgets list missing formatted target:\n%s", recList.Body.String())
+	}
+
+	// A non-positive amount is rejected (400) and does not change the store.
+	recBad := httptest.NewRecorder()
+	bad := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader("category_id=1&amount=0"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recBad, withCookie(bad, cookie))
+	if recBad.Code != http.StatusBadRequest || !strings.Contains(recBad.Body.String(), "maior que zero") {
+		t.Fatalf("set zero = %d, want 400 with message", recBad.Code)
+	}
+
+	// Delete it.
+	recDel := httptest.NewRecorder()
+	del := httptest.NewRequest(http.MethodPost, "/budgets/delete", strings.NewReader("category_id=1"))
+	del.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recDel, withCookie(del, cookie))
+	if recDel.Code != http.StatusSeeOther || len(budgets.budgets) != 0 {
+		t.Fatalf("delete budget = %d, budgets = %+v", recDel.Code, budgets.budgets)
 	}
 }
 

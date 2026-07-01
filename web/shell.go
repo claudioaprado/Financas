@@ -390,6 +390,15 @@ type RuleRow struct {
 	Kind         string // "income" | "expense"
 }
 
+// BudgetRow is one category's monthly target on the budgets page (Story 8.1),
+// with the target pre-formatted in the Display Currency.
+type BudgetRow struct {
+	CategoryID   int64
+	CategoryName string
+	Kind         string // "income" | "expense"
+	Target       string // formatted money, e.g. "500,00 BRL"
+}
+
 // SecurityTypeOption is one security-type choice in the create form (value is
 // stored lowercase, label is display-cased).
 type SecurityTypeOption struct {

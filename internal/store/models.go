@@ -25,6 +25,13 @@ type AppSetting struct {
 	DisplayCurrency string
 }
 
+type Budget struct {
+	ID         int64
+	CategoryID int64
+	Amount     decimal.Decimal
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Category struct {
 	ID        int64
 	Name      string

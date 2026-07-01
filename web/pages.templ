@@ -974,6 +974,7 @@ templ CategoriesPage(data ShellData, categories []CategoryRow, errMsg string) {
 					}
 				</tbody>
 			</table>
+			<p class="mt-4 text-sm"><a href="/budgets" class="text-accent hover:underline">Orçamento mensal por categoria →</a></p>
 		</section>
 	}
 }
@@ -1229,6 +1230,67 @@ templ CategoryRulesPage(data ShellData, categories []CategoryOption, rules []Rul
 								<td class="text-right">
 									<form method="post" action="/categories/rules/delete">
 										<input type="hidden" name="id" value={ accountID(r.ID) }/>
+										<button class="text-loss hover:underline" type="submit">Remover</button>
+									</form>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// BudgetsPage manages monthly budget targets per category (Story 8.1): a set form
+// (a category + an amount in the Display Currency) and a list with remove. Setting
+// a target for a category that already has one overwrites it (one target per
+// category). The planned-vs-actual view with rollover is Story 8.2.
+templ BudgetsPage(data ShellData, categories []CategoryOption, budgets []BudgetRow, currency, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categorias</a></p>
+			<h1 class="mt-1 text-2xl font-bold">Orçamento mensal</h1>
+			<p class="mt-1 text-sm text-muted">Defina um valor-alvo mensal por categoria, em { currency } (a sua moeda de exibição). Uma categoria sem alvo simplesmente não tem orçamento.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<form method="post" action="/budgets" class="mt-4 flex flex-wrap items-end gap-3">
+				<div>
+					<label class="block text-xs" for="category_id">Categoria</label>
+					<select id="category_id" name="category_id" class="rounded border px-2 py-1 text-sm">
+						for _, c := range categories {
+							<option value={ accountID(c.ID) }>{ c.Name } ({ c.Kind })</option>
+						}
+					</select>
+				</div>
+				<div>
+					<label class="block text-xs" for="amount">Alvo mensal ({ currency })</label>
+					<input id="amount" name="amount" type="text" inputmode="decimal" required class="w-32 rounded border px-2 py-1 text-sm" placeholder="p.ex. 500,00"/>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Salvar alvo</button>
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Categoria</th>
+						<th>Tipo</th>
+						<th class="text-right">Alvo mensal</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(budgets) == 0 {
+						<tr><td colspan="4" class="py-2 text-muted">Nenhum orçamento definido ainda.</td></tr>
+					} else {
+						for _, b := range budgets {
+							<tr class="border-t border-black/5">
+								<td class="py-1">{ b.CategoryName }</td>
+								<td>{ b.Kind }</td>
+								<td class="text-right">{ b.Target }</td>
+								<td class="text-right">
+									<form method="post" action="/budgets/delete">
+										<input type="hidden" name="category_id" value={ accountID(b.CategoryID) }/>
 										<button class="text-loss hover:underline" type="submit">Remover</button>
 									</form>
 								</td>

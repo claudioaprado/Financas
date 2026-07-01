@@ -30,6 +30,7 @@ type Querier interface {
 	CreateOFXTransaction(ctx context.Context, arg CreateOFXTransactionParams) (int64, error)
 	CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
+	DeleteBudget(ctx context.Context, categoryID int64) (int64, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
 	DeleteCategoryRule(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
@@ -59,6 +60,7 @@ type Querier interface {
 	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)
 	ListAllAccounts(ctx context.Context) ([]Account, error)
+	ListBudgets(ctx context.Context) ([]ListBudgetsRow, error)
 	ListCategories(ctx context.Context) ([]Category, error)
 	ListCategoryRules(ctx context.Context) ([]ListCategoryRulesRow, error)
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
@@ -95,6 +97,11 @@ type Querier interface {
 	RestoreResetSecuritySeq(ctx context.Context) error
 	RestoreResetTransactionSeq(ctx context.Context) error
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)
+	// Monthly category budgets (Story 8.1 / FR-18). One target per category, keyed by
+	// category_id (UNIQUE), so SetBudget upserts. ListBudgets joins category to return
+	// its name + kind for the management view, ordered by kind then name (stable with
+	// the categories list).
+	SetBudget(ctx context.Context, arg SetBudgetParams) (Budget, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (int64, error)
 }
