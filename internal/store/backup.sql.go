@@ -51,6 +51,41 @@ func (q *Queries) ExportAccounts(ctx context.Context) ([]Account, error) {
 	return items, nil
 }
 
+const exportBudgets = `-- name: ExportBudgets :many
+
+SELECT id, category_id, amount, created_at FROM budget ORDER BY id
+`
+
+// Phase-2 authored tables (Epics 8-10) added to the backup round-trip: budgets,
+// auto-categorization rules, recurring templates, and tags + their links. Each
+// SELECT lists exactly its table's columns (model-struct order) so sqlc returns
+// the existing store models; restore deletes them child→parent and re-inserts
+// parent→child with original PKs (identity insert), then resets the sequences.
+func (q *Queries) ExportBudgets(ctx context.Context) ([]Budget, error) {
+	rows, err := q.db.Query(ctx, exportBudgets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Budget{}
+	for rows.Next() {
+		var i Budget
+		if err := rows.Scan(
+			&i.ID,
+			&i.CategoryID,
+			&i.Amount,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const exportCategories = `-- name: ExportCategories :many
 SELECT id, name, kind, created_at FROM category ORDER BY id
 `
@@ -68,6 +103,35 @@ func (q *Queries) ExportCategories(ctx context.Context) ([]Category, error) {
 			&i.ID,
 			&i.Name,
 			&i.Kind,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const exportCategoryRules = `-- name: ExportCategoryRules :many
+SELECT id, match_text, category_id, created_at FROM category_rule ORDER BY id
+`
+
+func (q *Queries) ExportCategoryRules(ctx context.Context) ([]CategoryRule, error) {
+	rows, err := q.db.Query(ctx, exportCategoryRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CategoryRule{}
+	for rows.Next() {
+		var i CategoryRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.MatchText,
+			&i.CategoryID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -141,6 +205,47 @@ func (q *Queries) ExportPrices(ctx context.Context) ([]Price, error) {
 	return items, nil
 }
 
+const exportRecurring = `-- name: ExportRecurring :many
+SELECT id, type, from_account_id, to_account_id, amount, to_amount, category_id,
+       cadence, interval_n, start_date, end_date, next_due, description, created_at
+FROM recurring ORDER BY id
+`
+
+func (q *Queries) ExportRecurring(ctx context.Context) ([]Recurring, error) {
+	rows, err := q.db.Query(ctx, exportRecurring)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Recurring{}
+	for rows.Next() {
+		var i Recurring
+		if err := rows.Scan(
+			&i.ID,
+			&i.Type,
+			&i.FromAccountID,
+			&i.ToAccountID,
+			&i.Amount,
+			&i.ToAmount,
+			&i.CategoryID,
+			&i.Cadence,
+			&i.IntervalN,
+			&i.StartDate,
+			&i.EndDate,
+			&i.NextDue,
+			&i.Description,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const exportSecurities = `-- name: ExportSecurities :many
 SELECT id, symbol, name, type, quote_currency, created_at FROM security ORDER BY id
 `
@@ -162,6 +267,54 @@ func (q *Queries) ExportSecurities(ctx context.Context) ([]Security, error) {
 			&i.QuoteCurrency,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const exportTags = `-- name: ExportTags :many
+SELECT id, name, created_at FROM tag ORDER BY id
+`
+
+func (q *Queries) ExportTags(ctx context.Context) ([]Tag, error) {
+	rows, err := q.db.Query(ctx, exportTags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Tag{}
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const exportTransactionTags = `-- name: ExportTransactionTags :many
+SELECT transaction_id, tag_id FROM transaction_tag ORDER BY transaction_id, tag_id
+`
+
+func (q *Queries) ExportTransactionTags(ctx context.Context) ([]TransactionTag, error) {
+	rows, err := q.db.Query(ctx, exportTransactionTags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TransactionTag{}
+	for rows.Next() {
+		var i TransactionTag
+		if err := rows.Scan(&i.TransactionID, &i.TagID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -225,12 +378,30 @@ func (q *Queries) RestoreDeleteAccounts(ctx context.Context) error {
 	return err
 }
 
+const restoreDeleteBudgets = `-- name: RestoreDeleteBudgets :exec
+DELETE FROM budget
+`
+
+func (q *Queries) RestoreDeleteBudgets(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteBudgets)
+	return err
+}
+
 const restoreDeleteCategories = `-- name: RestoreDeleteCategories :exec
 DELETE FROM category
 `
 
 func (q *Queries) RestoreDeleteCategories(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, restoreDeleteCategories)
+	return err
+}
+
+const restoreDeleteCategoryRules = `-- name: RestoreDeleteCategoryRules :exec
+DELETE FROM category_rule
+`
+
+func (q *Queries) RestoreDeleteCategoryRules(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteCategoryRules)
 	return err
 }
 
@@ -252,12 +423,39 @@ func (q *Queries) RestoreDeletePrices(ctx context.Context) error {
 	return err
 }
 
+const restoreDeleteRecurring = `-- name: RestoreDeleteRecurring :exec
+DELETE FROM recurring
+`
+
+func (q *Queries) RestoreDeleteRecurring(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteRecurring)
+	return err
+}
+
 const restoreDeleteSecurities = `-- name: RestoreDeleteSecurities :exec
 DELETE FROM security
 `
 
 func (q *Queries) RestoreDeleteSecurities(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, restoreDeleteSecurities)
+	return err
+}
+
+const restoreDeleteTags = `-- name: RestoreDeleteTags :exec
+DELETE FROM tag
+`
+
+func (q *Queries) RestoreDeleteTags(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteTags)
+	return err
+}
+
+const restoreDeleteTransactionTags = `-- name: RestoreDeleteTransactionTags :exec
+DELETE FROM transaction_tag
+`
+
+func (q *Queries) RestoreDeleteTransactionTags(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteTransactionTags)
 	return err
 }
 
@@ -304,6 +502,29 @@ func (q *Queries) RestoreInsertAccount(ctx context.Context, arg RestoreInsertAcc
 	return err
 }
 
+const restoreInsertBudget = `-- name: RestoreInsertBudget :exec
+INSERT INTO budget (id, category_id, amount, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4)
+`
+
+type RestoreInsertBudgetParams struct {
+	ID         int64
+	CategoryID int64
+	Amount     decimal.Decimal
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertBudget(ctx context.Context, arg RestoreInsertBudgetParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertBudget,
+		arg.ID,
+		arg.CategoryID,
+		arg.Amount,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const restoreInsertCategory = `-- name: RestoreInsertCategory :exec
 INSERT INTO category (id, name, kind, created_at)
 OVERRIDING SYSTEM VALUE
@@ -322,6 +543,29 @@ func (q *Queries) RestoreInsertCategory(ctx context.Context, arg RestoreInsertCa
 		arg.ID,
 		arg.Name,
 		arg.Kind,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const restoreInsertCategoryRule = `-- name: RestoreInsertCategoryRule :exec
+INSERT INTO category_rule (id, match_text, category_id, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4)
+`
+
+type RestoreInsertCategoryRuleParams struct {
+	ID         int64
+	MatchText  string
+	CategoryID int64
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertCategoryRule(ctx context.Context, arg RestoreInsertCategoryRuleParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertCategoryRule,
+		arg.ID,
+		arg.MatchText,
+		arg.CategoryID,
 		arg.CreatedAt,
 	)
 	return err
@@ -379,6 +623,50 @@ func (q *Queries) RestoreInsertPrice(ctx context.Context, arg RestoreInsertPrice
 	return err
 }
 
+const restoreInsertRecurring = `-- name: RestoreInsertRecurring :exec
+INSERT INTO recurring (id, type, from_account_id, to_account_id, amount, to_amount, category_id,
+                       cadence, interval_n, start_date, end_date, next_due, description, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+`
+
+type RestoreInsertRecurringParams struct {
+	ID            int64
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	Amount        decimal.Decimal
+	ToAmount      decimal.Decimal
+	CategoryID    pgtype.Int8
+	Cadence       string
+	IntervalN     int32
+	StartDate     time.Time
+	EndDate       pgtype.Date
+	NextDue       time.Time
+	Description   string
+	CreatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertRecurring(ctx context.Context, arg RestoreInsertRecurringParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertRecurring,
+		arg.ID,
+		arg.Type,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.Amount,
+		arg.ToAmount,
+		arg.CategoryID,
+		arg.Cadence,
+		arg.IntervalN,
+		arg.StartDate,
+		arg.EndDate,
+		arg.NextDue,
+		arg.Description,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const restoreInsertSecurity = `-- name: RestoreInsertSecurity :exec
 INSERT INTO security (id, symbol, name, type, quote_currency, created_at)
 OVERRIDING SYSTEM VALUE
@@ -403,6 +691,23 @@ func (q *Queries) RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSe
 		arg.QuoteCurrency,
 		arg.CreatedAt,
 	)
+	return err
+}
+
+const restoreInsertTag = `-- name: RestoreInsertTag :exec
+INSERT INTO tag (id, name, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3)
+`
+
+type RestoreInsertTagParams struct {
+	ID        int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertTag(ctx context.Context, arg RestoreInsertTagParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertTag, arg.ID, arg.Name, arg.CreatedAt)
 	return err
 }
 
@@ -457,6 +762,21 @@ func (q *Queries) RestoreInsertTransaction(ctx context.Context, arg RestoreInser
 	return err
 }
 
+const restoreInsertTransactionTag = `-- name: RestoreInsertTransactionTag :exec
+INSERT INTO transaction_tag (transaction_id, tag_id)
+VALUES ($1, $2)
+`
+
+type RestoreInsertTransactionTagParams struct {
+	TransactionID int64
+	TagID         int64
+}
+
+func (q *Queries) RestoreInsertTransactionTag(ctx context.Context, arg RestoreInsertTransactionTagParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertTransactionTag, arg.TransactionID, arg.TagID)
+	return err
+}
+
 const restoreResetAccountSeq = `-- name: RestoreResetAccountSeq :exec
 SELECT setval(pg_get_serial_sequence('account', 'id'),
               COALESCE((SELECT MAX(id) FROM account), 1),
@@ -465,6 +785,28 @@ SELECT setval(pg_get_serial_sequence('account', 'id'),
 
 func (q *Queries) RestoreResetAccountSeq(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, restoreResetAccountSeq)
+	return err
+}
+
+const restoreResetBudgetSeq = `-- name: RestoreResetBudgetSeq :exec
+SELECT setval(pg_get_serial_sequence('budget', 'id'),
+              COALESCE((SELECT MAX(id) FROM budget), 1),
+              (SELECT MAX(id) FROM budget) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetBudgetSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetBudgetSeq)
+	return err
+}
+
+const restoreResetCategoryRuleSeq = `-- name: RestoreResetCategoryRuleSeq :exec
+SELECT setval(pg_get_serial_sequence('category_rule', 'id'),
+              COALESCE((SELECT MAX(id) FROM category_rule), 1),
+              (SELECT MAX(id) FROM category_rule) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetCategoryRuleSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetCategoryRuleSeq)
 	return err
 }
 
@@ -501,6 +843,17 @@ func (q *Queries) RestoreResetPriceSeq(ctx context.Context) error {
 	return err
 }
 
+const restoreResetRecurringSeq = `-- name: RestoreResetRecurringSeq :exec
+SELECT setval(pg_get_serial_sequence('recurring', 'id'),
+              COALESCE((SELECT MAX(id) FROM recurring), 1),
+              (SELECT MAX(id) FROM recurring) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetRecurringSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetRecurringSeq)
+	return err
+}
+
 const restoreResetSecuritySeq = `-- name: RestoreResetSecuritySeq :exec
 SELECT setval(pg_get_serial_sequence('security', 'id'),
               COALESCE((SELECT MAX(id) FROM security), 1),
@@ -509,6 +862,17 @@ SELECT setval(pg_get_serial_sequence('security', 'id'),
 
 func (q *Queries) RestoreResetSecuritySeq(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, restoreResetSecuritySeq)
+	return err
+}
+
+const restoreResetTagSeq = `-- name: RestoreResetTagSeq :exec
+SELECT setval(pg_get_serial_sequence('tag', 'id'),
+              COALESCE((SELECT MAX(id) FROM tag), 1),
+              (SELECT MAX(id) FROM tag) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetTagSeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetTagSeq)
 	return err
 }
 

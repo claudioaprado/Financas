@@ -1,12 +1,16 @@
 // Package backup is the use-case for exporting the owner's AUTHORED data to a
 // single, self-describing, re-importable file (Story 6.1, FR-15). It reads only
 // authored state — accounts, categories, securities, exchange rates, prices,
-// transactions, and the display-currency setting — never derived figures
-// (holdings, balances, valuation, net worth), which are recomputed on read
-// (AD-2). It assembles a versioned, JSON-ready value; the http layer serializes
-// and streams it (AD-1). Decimal amounts are carried as strings, never floats
-// (AD-4/NFR-5). All tables are read inside one transaction so the snapshot is
-// internally consistent (NFR-2).
+// transactions, the display-currency setting, and the Phase-2 authored tables
+// (budgets, auto-categorization rules, recurring templates, tags + their links)
+// — never derived figures (holdings, balances, valuation, net worth, budget
+// carryover, recurrence "due" state), which are recomputed on read (AD-2). It
+// assembles a versioned, JSON-ready value; the http layer serializes and streams
+// it (AD-1). Decimal amounts are carried as strings, never floats (AD-4/NFR-5).
+// All tables are read inside one transaction so the snapshot is internally
+// consistent (NFR-2). New table groups are ADDITIVE and optional on restore
+// (absent in an older file ⇒ that table simply restores empty), so ExportVersion
+// stays 1 and pre-Phase-2 backups still restore.
 package backup
 
 import (
@@ -51,6 +55,13 @@ type Export struct {
 	ExchangeRates   []ExchangeRateDTO `json:"exchange_rates"`
 	Prices          []PriceDTO        `json:"prices"`
 	Transactions    []TransactionDTO  `json:"transactions"`
+	// Phase-2 authored tables (Epics 8-10). Absent in pre-Phase-2 exports ⇒ empty
+	// on restore, which correctly leaves those tables empty.
+	Budgets         []BudgetDTO         `json:"budgets"`
+	CategoryRules   []CategoryRuleDTO   `json:"category_rules"`
+	Recurring       []RecurringDTO      `json:"recurring"`
+	Tags            []TagDTO            `json:"tags"`
+	TransactionTags []TransactionTagDTO `json:"transaction_tags"`
 }
 
 // AccountDTO mirrors the account table at full fidelity (PK + created_at).
@@ -123,6 +134,54 @@ type TransactionDTO struct {
 	Note          string  `json:"note,omitempty"`  // free-text annotation (Story 10.2); absent in pre-10.2 exports ⇒ ""
 }
 
+// BudgetDTO mirrors the budget table (Story 8.1). Amount is a decimal string.
+type BudgetDTO struct {
+	ID         int64  `json:"id"`
+	CategoryID int64  `json:"category_id"`
+	Amount     string `json:"amount"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+// CategoryRuleDTO mirrors the category_rule table (Story 7.2).
+type CategoryRuleDTO struct {
+	ID         int64  `json:"id"`
+	MatchText  string `json:"match_text"`
+	CategoryID int64  `json:"category_id"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+// RecurringDTO mirrors the recurring template table (Epic 9). Nullable FKs and the
+// end date are pointers; amounts are decimal strings; dates are YYYY-MM-DD.
+type RecurringDTO struct {
+	ID            int64   `json:"id"`
+	Type          string  `json:"type"`
+	FromAccountID *int64  `json:"from_account_id,omitempty"`
+	ToAccountID   *int64  `json:"to_account_id,omitempty"`
+	Amount        string  `json:"amount"`
+	ToAmount      string  `json:"to_amount"`
+	CategoryID    *int64  `json:"category_id,omitempty"`
+	Cadence       string  `json:"cadence"`
+	IntervalN     int32   `json:"interval_n"`
+	StartDate     string  `json:"start_date"` // YYYY-MM-DD
+	EndDate       *string `json:"end_date,omitempty"`
+	NextDue       string  `json:"next_due"` // YYYY-MM-DD
+	Description   string  `json:"description"`
+	CreatedAt     string  `json:"created_at,omitempty"`
+}
+
+// TagDTO mirrors the tag table (Story 10.2).
+type TagDTO struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// TransactionTagDTO mirrors the transaction_tag join (Story 10.2).
+type TransactionTagDTO struct {
+	TransactionID int64 `json:"transaction_id"`
+	TagID         int64 `json:"tag_id"`
+}
+
 // Service assembles the authored-data export.
 type Service struct {
 	pool *pgxpool.Pool
@@ -166,6 +225,11 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 		ExchangeRates:   []ExchangeRateDTO{},
 		Prices:          []PriceDTO{},
 		Transactions:    []TransactionDTO{},
+		Budgets:         []BudgetDTO{},
+		CategoryRules:   []CategoryRuleDTO{},
+		Recurring:       []RecurringDTO{},
+		Tags:            []TagDTO{},
+		TransactionTags: []TransactionTagDTO{},
 	}
 
 	accounts, err := q.ExportAccounts(ctx)
@@ -266,10 +330,70 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 		})
 	}
 
+	budgets, err := q.ExportBudgets(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: budgets: %w", err)
+	}
+	for _, b := range budgets {
+		exp.Budgets = append(exp.Budgets, BudgetDTO{
+			ID: b.ID, CategoryID: b.CategoryID, Amount: b.Amount.String(), CreatedAt: timestamp(b.CreatedAt),
+		})
+	}
+
+	rules, err := q.ExportCategoryRules(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: category rules: %w", err)
+	}
+	for _, r := range rules {
+		exp.CategoryRules = append(exp.CategoryRules, CategoryRuleDTO{
+			ID: r.ID, MatchText: r.MatchText, CategoryID: r.CategoryID, CreatedAt: timestamp(r.CreatedAt),
+		})
+	}
+
+	recurring, err := q.ExportRecurring(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: recurring: %w", err)
+	}
+	for _, r := range recurring {
+		exp.Recurring = append(exp.Recurring, RecurringDTO{
+			ID: r.ID, Type: r.Type,
+			FromAccountID: intPtr(r.FromAccountID), ToAccountID: intPtr(r.ToAccountID),
+			Amount: r.Amount.String(), ToAmount: r.ToAmount.String(),
+			CategoryID: intPtr(r.CategoryID), Cadence: r.Cadence, IntervalN: r.IntervalN,
+			StartDate: r.StartDate.Format(dateLayout), EndDate: datePtr(r.EndDate),
+			NextDue: r.NextDue.Format(dateLayout), Description: r.Description, CreatedAt: timestamp(r.CreatedAt),
+		})
+	}
+
+	tags, err := q.ExportTags(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: tags: %w", err)
+	}
+	for _, t := range tags {
+		exp.Tags = append(exp.Tags, TagDTO{ID: t.ID, Name: t.Name, CreatedAt: timestamp(t.CreatedAt)})
+	}
+
+	txnTags, err := q.ExportTransactionTags(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: transaction tags: %w", err)
+	}
+	for _, tt := range txnTags {
+		exp.TransactionTags = append(exp.TransactionTags, TransactionTagDTO{TransactionID: tt.TransactionID, TagID: tt.TagID})
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Export{}, fmt.Errorf("backup: commit: %w", err)
 	}
 	return exp, nil
+}
+
+// datePtr renders a nullable pgtype.Date as YYYY-MM-DD, or nil when NULL.
+func datePtr(d pgtype.Date) *string {
+	if !d.Valid {
+		return nil
+	}
+	s := d.Time.Format(dateLayout)
+	return &s
 }
 
 // timestamp renders a nullable created_at as RFC3339Nano UTC, or "" when NULL.
@@ -312,12 +436,17 @@ var (
 
 // RestoreSummary reports how many authored rows were restored, per table.
 type RestoreSummary struct {
-	Accounts      int
-	Categories    int
-	Securities    int
-	ExchangeRates int
-	Prices        int
-	Transactions  int
+	Accounts        int
+	Categories      int
+	Securities      int
+	ExchangeRates   int
+	Prices          int
+	Transactions    int
+	Budgets         int
+	CategoryRules   int
+	Recurring       int
+	Tags            int
+	TransactionTags int
 }
 
 // Restore rebuilds the instance from a 6.1 export (FR-15). It is a replace-all
@@ -456,6 +585,72 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 			Quantity: qty, Price: price, Fees: fees, Fitid: toText(t.Fitid), Note: t.Note,
 		})
 	}
+	budgets := make([]store.RestoreInsertBudgetParams, 0, len(exp.Budgets))
+	for _, b := range exp.Budgets {
+		amt, err := parseDecimal("budget.amount", b.Amount)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		ca, err := toTimestamp(b.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		budgets = append(budgets, store.RestoreInsertBudgetParams{ID: b.ID, CategoryID: b.CategoryID, Amount: amt, CreatedAt: ca})
+	}
+	rules := make([]store.RestoreInsertCategoryRuleParams, 0, len(exp.CategoryRules))
+	for _, r := range exp.CategoryRules {
+		ca, err := toTimestamp(r.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		rules = append(rules, store.RestoreInsertCategoryRuleParams{ID: r.ID, MatchText: r.MatchText, CategoryID: r.CategoryID, CreatedAt: ca})
+	}
+	recurring := make([]store.RestoreInsertRecurringParams, 0, len(exp.Recurring))
+	for _, r := range exp.Recurring {
+		amt, err := parseDecimal("recurring.amount", r.Amount)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		toAmt, err := parseDecimal("recurring.to_amount", r.ToAmount)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		start, err := parseDay("recurring.start_date", r.StartDate)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		next, err := parseDay("recurring.next_due", r.NextDue)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		end, err := toDate("recurring.end_date", r.EndDate)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		ca, err := toTimestamp(r.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		recurring = append(recurring, store.RestoreInsertRecurringParams{
+			ID: r.ID, Type: r.Type,
+			FromAccountID: toInt8(r.FromAccountID), ToAccountID: toInt8(r.ToAccountID),
+			Amount: amt, ToAmount: toAmt, CategoryID: toInt8(r.CategoryID),
+			Cadence: r.Cadence, IntervalN: r.IntervalN, StartDate: start, EndDate: end,
+			NextDue: next, Description: r.Description, CreatedAt: ca,
+		})
+	}
+	tags := make([]store.RestoreInsertTagParams, 0, len(exp.Tags))
+	for _, t := range exp.Tags {
+		ca, err := toTimestamp(t.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		tags = append(tags, store.RestoreInsertTagParams{ID: t.ID, Name: t.Name, CreatedAt: ca})
+	}
+	txnTags := make([]store.RestoreInsertTransactionTagParams, 0, len(exp.TransactionTags))
+	for _, tt := range exp.TransactionTags {
+		txnTags = append(txnTags, store.RestoreInsertTransactionTagParams{TransactionID: tt.TransactionID, TagID: tt.TagID})
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -464,8 +659,12 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := store.New(tx)
 
-	// Delete child→parent so foreign keys never block.
+	// Delete child→parent so foreign keys never block. The Phase-2 tables go first:
+	// transaction_tag references transaction + tag; budget/category_rule reference
+	// category; recurring references account + category.
 	for _, del := range []func(context.Context) error{
+		q.RestoreDeleteTransactionTags, q.RestoreDeleteTags,
+		q.RestoreDeleteBudgets, q.RestoreDeleteCategoryRules, q.RestoreDeleteRecurring,
 		q.RestoreDeleteTransactions, q.RestoreDeletePrices, q.RestoreDeleteExchangeRates,
 		q.RestoreDeleteSecurities, q.RestoreDeleteCategories, q.RestoreDeleteAccounts,
 	} {
@@ -507,12 +706,41 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 			return RestoreSummary{}, fmt.Errorf("%w: restoring transactions: %v", ErrMalformed, err)
 		}
 	}
+	// Phase-2 children: budgets/rules/recurring need category+account; tags stand
+	// alone; transaction_tag needs both transaction and tag.
+	for _, p := range budgets {
+		if err := q.RestoreInsertBudget(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring budgets: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range rules {
+		if err := q.RestoreInsertCategoryRule(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring category rules: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range recurring {
+		if err := q.RestoreInsertRecurring(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring recurring: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range tags {
+		if err := q.RestoreInsertTag(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring tags: %v", ErrMalformed, err)
+		}
+	}
+	for _, p := range txnTags {
+		if err := q.RestoreInsertTransactionTag(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring transaction tags: %v", ErrMalformed, err)
+		}
+	}
 
 	// Advance each identity sequence past the restored ids so the next
 	// owner-created row gets a fresh, non-colliding id.
 	for _, reset := range []func(context.Context) error{
 		q.RestoreResetAccountSeq, q.RestoreResetCategorySeq, q.RestoreResetSecuritySeq,
 		q.RestoreResetExchangeRateSeq, q.RestoreResetPriceSeq, q.RestoreResetTransactionSeq,
+		q.RestoreResetBudgetSeq, q.RestoreResetCategoryRuleSeq, q.RestoreResetRecurringSeq,
+		q.RestoreResetTagSeq,
 	} {
 		if err := reset(ctx); err != nil {
 			return RestoreSummary{}, fmt.Errorf("backup: reset sequence: %w", err)
@@ -527,12 +755,17 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 		return RestoreSummary{}, fmt.Errorf("backup: commit: %w", err)
 	}
 	return RestoreSummary{
-		Accounts:      len(accounts),
-		Categories:    len(categories),
-		Securities:    len(securities),
-		ExchangeRates: len(rates),
-		Prices:        len(prices),
-		Transactions:  len(transactions),
+		Accounts:        len(accounts),
+		Categories:      len(categories),
+		Securities:      len(securities),
+		ExchangeRates:   len(rates),
+		Prices:          len(prices),
+		Transactions:    len(transactions),
+		Budgets:         len(budgets),
+		CategoryRules:   len(rules),
+		Recurring:       len(recurring),
+		Tags:            len(tags),
+		TransactionTags: len(txnTags),
 	}, nil
 }
 
@@ -583,4 +816,17 @@ func toText(p *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *p, Valid: true}
+}
+
+// toDate maps a nullable YYYY-MM-DD DTO field to pgtype.Date (inverse of datePtr).
+// A present-but-unparseable value is a malformed file.
+func toDate(field string, p *string) (pgtype.Date, error) {
+	if p == nil {
+		return pgtype.Date{}, nil
+	}
+	t, err := time.Parse(dateLayout, *p)
+	if err != nil {
+		return pgtype.Date{}, fmt.Errorf("%w: bad date in %s: %v", ErrMalformed, field, err)
+	}
+	return pgtype.Date{Time: t, Valid: true}, nil
 }

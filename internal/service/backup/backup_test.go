@@ -17,9 +17,12 @@ import (
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
+	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/price"
+	"github.com/claudioaprado/financas/internal/service/recurring"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
@@ -316,7 +319,9 @@ func TestExportEmptyInstance(t *testing.T) {
 		t.Error("display currency empty on fresh instance")
 	}
 	if exp.Accounts == nil || exp.Categories == nil || exp.Securities == nil ||
-		exp.ExchangeRates == nil || exp.Prices == nil || exp.Transactions == nil {
+		exp.ExchangeRates == nil || exp.Prices == nil || exp.Transactions == nil ||
+		exp.Budgets == nil || exp.CategoryRules == nil || exp.Recurring == nil ||
+		exp.Tags == nil || exp.TransactionTags == nil {
 		t.Errorf("a slice is nil on empty instance: %+v", exp)
 	}
 	if len(exp.Accounts) != 0 || len(exp.Transactions) != 0 {
@@ -371,11 +376,29 @@ func seedSample(t *testing.T, pool *pgxpool.Pool) int64 {
 	if _, err := prices.Add(ctx, sec.ID, dt(t, "2026-06-02"), req("120")); err != nil {
 		t.Fatalf("price: %v", err)
 	}
-	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Income, req("1000"), dt(t, "2026-06-03"), "pay", salary.ID); err != nil {
+	inc, err := txns.Record(ctx, cashUSD.ID, transaction.Income, req("1000"), dt(t, "2026-06-03"), "pay", salary.ID)
+	if err != nil {
 		t.Fatalf("income: %v", err)
 	}
 	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Expense, req("40.25"), dt(t, "2026-06-04"), "lunch", 0); err != nil {
 		t.Fatalf("expense: %v", err)
+	}
+	// Phase-2 authored tables (Epics 8-10) must survive the round-trip too.
+	if err := budget.New(pool).Set(ctx, salary.ID, req("2000")); err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+	if _, err := categoryrule.New(pool).Add(ctx, "bonus", salary.ID); err != nil {
+		t.Fatalf("category rule: %v", err)
+	}
+	if _, err := recurring.New(pool).Create(ctx, recurring.Input{
+		Type: recurring.Expense, AccountID: cashUSD.ID, Amount: req("50"),
+		Cadence: "months", IntervalN: 1, StartDate: dt(t, "2026-06-10"), Description: "rent",
+	}); err != nil {
+		t.Fatalf("recurring: %v", err)
+	}
+	// A note + tags on the income row (exercises tag + transaction_tag).
+	if err := txns.Annotate(ctx, inc.ID, "first paycheck", []string{"work", "salary"}); err != nil {
+		t.Fatalf("annotate: %v", err)
 	}
 	if err := txns.Transfer(ctx, cashUSD.ID, cashBRL.ID, req("100"), req("500"), dt(t, "2026-06-05"), "move"); err != nil {
 		t.Fatalf("transfer: %v", err)
@@ -428,8 +451,17 @@ func TestRestoreRoundTrip(t *testing.T) {
 	}
 	if sum.Accounts != len(srcExp.Accounts) || sum.Transactions != len(srcExp.Transactions) ||
 		sum.Securities != len(srcExp.Securities) || sum.Prices != len(srcExp.Prices) ||
-		sum.ExchangeRates != len(srcExp.ExchangeRates) || sum.Categories != len(srcExp.Categories) {
+		sum.ExchangeRates != len(srcExp.ExchangeRates) || sum.Categories != len(srcExp.Categories) ||
+		sum.Budgets != len(srcExp.Budgets) || sum.CategoryRules != len(srcExp.CategoryRules) ||
+		sum.Recurring != len(srcExp.Recurring) || sum.Tags != len(srcExp.Tags) ||
+		sum.TransactionTags != len(srcExp.TransactionTags) {
 		t.Fatalf("summary %+v does not match source counts", sum)
+	}
+	// The Phase-2 tables must be non-empty in the fixture, else the round-trip
+	// below would vacuously "pass" without exercising them.
+	if len(srcExp.Budgets) == 0 || len(srcExp.CategoryRules) == 0 || len(srcExp.Recurring) == 0 ||
+		len(srcExp.Tags) == 0 || len(srcExp.TransactionTags) == 0 {
+		t.Fatalf("fixture missing Phase-2 rows: %+v", sum)
 	}
 
 	// B's export must be byte-identical to A's except the exported_at stamp:

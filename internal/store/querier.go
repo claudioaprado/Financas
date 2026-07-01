@@ -56,10 +56,20 @@ type Querier interface {
 	// created_at — for a deterministic, byte-stable snapshot that restore (6.2)
 	// can re-insert parents-before-children.
 	ExportAccounts(ctx context.Context) ([]Account, error)
+	// Phase-2 authored tables (Epics 8-10) added to the backup round-trip: budgets,
+	// auto-categorization rules, recurring templates, and tags + their links. Each
+	// SELECT lists exactly its table's columns (model-struct order) so sqlc returns
+	// the existing store models; restore deletes them child→parent and re-inserts
+	// parent→child with original PKs (identity insert), then resets the sequences.
+	ExportBudgets(ctx context.Context) ([]Budget, error)
 	ExportCategories(ctx context.Context) ([]Category, error)
+	ExportCategoryRules(ctx context.Context) ([]CategoryRule, error)
 	ExportExchangeRates(ctx context.Context) ([]ExchangeRate, error)
 	ExportPrices(ctx context.Context) ([]Price, error)
+	ExportRecurring(ctx context.Context) ([]Recurring, error)
 	ExportSecurities(ctx context.Context) ([]Security, error)
+	ExportTags(ctx context.Context) ([]Tag, error)
+	ExportTransactionTags(ctx context.Context) ([]TransactionTag, error)
 	ExportTransactions(ctx context.Context) ([]Transaction, error)
 	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
@@ -125,10 +135,15 @@ type Querier interface {
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
 	RestoreDeleteAccounts(ctx context.Context) error
+	RestoreDeleteBudgets(ctx context.Context) error
 	RestoreDeleteCategories(ctx context.Context) error
+	RestoreDeleteCategoryRules(ctx context.Context) error
 	RestoreDeleteExchangeRates(ctx context.Context) error
 	RestoreDeletePrices(ctx context.Context) error
+	RestoreDeleteRecurring(ctx context.Context) error
 	RestoreDeleteSecurities(ctx context.Context) error
+	RestoreDeleteTags(ctx context.Context) error
+	RestoreDeleteTransactionTags(ctx context.Context) error
 	// Restore queries for Story 6.2 (recover from a 6.1 export). Restore is a
 	// replace-all operation inside one transaction (AD-3): delete every authored row
 	// child→parent, re-insert each row parent→child with its ORIGINAL primary key
@@ -137,16 +152,25 @@ type Querier interface {
 	// figures are never written; they recompute on read (AD-2).
 	RestoreDeleteTransactions(ctx context.Context) error
 	RestoreInsertAccount(ctx context.Context, arg RestoreInsertAccountParams) error
+	RestoreInsertBudget(ctx context.Context, arg RestoreInsertBudgetParams) error
 	RestoreInsertCategory(ctx context.Context, arg RestoreInsertCategoryParams) error
+	RestoreInsertCategoryRule(ctx context.Context, arg RestoreInsertCategoryRuleParams) error
 	RestoreInsertExchangeRate(ctx context.Context, arg RestoreInsertExchangeRateParams) error
 	RestoreInsertPrice(ctx context.Context, arg RestoreInsertPriceParams) error
+	RestoreInsertRecurring(ctx context.Context, arg RestoreInsertRecurringParams) error
 	RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSecurityParams) error
+	RestoreInsertTag(ctx context.Context, arg RestoreInsertTagParams) error
 	RestoreInsertTransaction(ctx context.Context, arg RestoreInsertTransactionParams) error
+	RestoreInsertTransactionTag(ctx context.Context, arg RestoreInsertTransactionTagParams) error
 	RestoreResetAccountSeq(ctx context.Context) error
+	RestoreResetBudgetSeq(ctx context.Context) error
+	RestoreResetCategoryRuleSeq(ctx context.Context) error
 	RestoreResetCategorySeq(ctx context.Context) error
 	RestoreResetExchangeRateSeq(ctx context.Context) error
 	RestoreResetPriceSeq(ctx context.Context) error
+	RestoreResetRecurringSeq(ctx context.Context) error
 	RestoreResetSecuritySeq(ctx context.Context) error
+	RestoreResetTagSeq(ctx context.Context) error
 	RestoreResetTransactionSeq(ctx context.Context) error
 	SetAccountArchived(ctx context.Context, arg SetAccountArchivedParams) (int64, error)
 	// Monthly category budgets (Story 8.1 / FR-18). One target per category, keyed by

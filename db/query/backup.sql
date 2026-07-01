@@ -111,3 +111,86 @@ SELECT setval(pg_get_serial_sequence('price', 'id'),
 SELECT setval(pg_get_serial_sequence('transaction', 'id'),
               COALESCE((SELECT MAX(id) FROM transaction), 1),
               (SELECT MAX(id) FROM transaction) IS NOT NULL);
+
+-- Phase-2 authored tables (Epics 8-10) added to the backup round-trip: budgets,
+-- auto-categorization rules, recurring templates, and tags + their links. Each
+-- SELECT lists exactly its table's columns (model-struct order) so sqlc returns
+-- the existing store models; restore deletes them child→parent and re-inserts
+-- parent→child with original PKs (identity insert), then resets the sequences.
+
+-- name: ExportBudgets :many
+SELECT id, category_id, amount, created_at FROM budget ORDER BY id;
+
+-- name: ExportCategoryRules :many
+SELECT id, match_text, category_id, created_at FROM category_rule ORDER BY id;
+
+-- name: ExportRecurring :many
+SELECT id, type, from_account_id, to_account_id, amount, to_amount, category_id,
+       cadence, interval_n, start_date, end_date, next_due, description, created_at
+FROM recurring ORDER BY id;
+
+-- name: ExportTags :many
+SELECT id, name, created_at FROM tag ORDER BY id;
+
+-- name: ExportTransactionTags :many
+SELECT transaction_id, tag_id FROM transaction_tag ORDER BY transaction_id, tag_id;
+
+-- name: RestoreDeleteTransactionTags :exec
+DELETE FROM transaction_tag;
+
+-- name: RestoreDeleteTags :exec
+DELETE FROM tag;
+
+-- name: RestoreDeleteBudgets :exec
+DELETE FROM budget;
+
+-- name: RestoreDeleteCategoryRules :exec
+DELETE FROM category_rule;
+
+-- name: RestoreDeleteRecurring :exec
+DELETE FROM recurring;
+
+-- name: RestoreInsertBudget :exec
+INSERT INTO budget (id, category_id, amount, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4);
+
+-- name: RestoreInsertCategoryRule :exec
+INSERT INTO category_rule (id, match_text, category_id, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4);
+
+-- name: RestoreInsertRecurring :exec
+INSERT INTO recurring (id, type, from_account_id, to_account_id, amount, to_amount, category_id,
+                       cadence, interval_n, start_date, end_date, next_due, description, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+
+-- name: RestoreInsertTag :exec
+INSERT INTO tag (id, name, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3);
+
+-- name: RestoreInsertTransactionTag :exec
+INSERT INTO transaction_tag (transaction_id, tag_id)
+VALUES ($1, $2);
+
+-- name: RestoreResetBudgetSeq :exec
+SELECT setval(pg_get_serial_sequence('budget', 'id'),
+              COALESCE((SELECT MAX(id) FROM budget), 1),
+              (SELECT MAX(id) FROM budget) IS NOT NULL);
+
+-- name: RestoreResetCategoryRuleSeq :exec
+SELECT setval(pg_get_serial_sequence('category_rule', 'id'),
+              COALESCE((SELECT MAX(id) FROM category_rule), 1),
+              (SELECT MAX(id) FROM category_rule) IS NOT NULL);
+
+-- name: RestoreResetRecurringSeq :exec
+SELECT setval(pg_get_serial_sequence('recurring', 'id'),
+              COALESCE((SELECT MAX(id) FROM recurring), 1),
+              (SELECT MAX(id) FROM recurring) IS NOT NULL);
+
+-- name: RestoreResetTagSeq :exec
+SELECT setval(pg_get_serial_sequence('tag', 'id'),
+              COALESCE((SELECT MAX(id) FROM tag), 1),
+              (SELECT MAX(id) FROM tag) IS NOT NULL);
