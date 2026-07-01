@@ -1147,6 +1147,7 @@ func registerFilter(req *http.Request) transaction.RegisterFilter {
 		AccountID:  acctID,
 		Type:       transaction.TxType(req.FormValue("type")),
 		CategoryID: catID,
+		Search:     req.FormValue("q"),
 	}
 }
 
@@ -1159,6 +1160,7 @@ func renderRegister(deps Deps, w http.ResponseWriter, req *http.Request, f trans
 		SelAccount:  f.AccountID,
 		SelType:     string(f.Type),
 		SelCategory: f.CategoryID,
+		Query:       f.Search,
 		ErrMsg:      errMsg,
 	}
 	// Dropdowns are secondary: a load failure degrades to empty (logged), it does
@@ -1222,7 +1224,7 @@ func transactionsBulkCategorize(deps Deps) http.HandlerFunc {
 // carried by the bulk form's hidden fields.
 func registerRedirect(req *http.Request) string {
 	q := url.Values{}
-	for _, k := range []string{"account", "type", "category"} {
+	for _, k := range []string{"account", "type", "category", "q"} {
 		if v := req.PostFormValue(k); v != "" && v != "0" {
 			q.Set(k, v)
 		}

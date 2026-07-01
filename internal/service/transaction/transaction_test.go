@@ -532,6 +532,60 @@ func TestAnnotate(t *testing.T) {
 	}
 }
 
+// TestRegisterSearch covers Story 10.3: the register filters by a case-insensitive
+// substring over description OR note, combinable with the type filter.
+func TestRegisterSearch(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	cash, err := accts.Create(ctx, fmt.Sprintf("Cash-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create cash: %v", err)
+	}
+	uniq := fmt.Sprintf("Zx%d", run) // unique token so the shared DB doesn't leak matches
+	coffee, _ := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("5"), d(t, "2024-07-01"), uniq+" Coffee", 0)
+	pay, _ := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("50"), d(t, "2024-07-02"), "salary", 0)
+	// A row that matches only via its NOTE, not its description.
+	other, _ := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("9"), d(t, "2024-07-03"), "misc", 0)
+	if err := svc.Annotate(ctx, other.ID, uniq+" reembolso", nil); err != nil {
+		t.Fatalf("annotate: %v", err)
+	}
+
+	// Case-insensitive description match.
+	rows, err := svc.Register(ctx, RegisterFilter{Search: uniq + " cOfFeE"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != coffee.ID {
+		t.Fatalf("desc search = %+v; want only the coffee row", rows)
+	}
+
+	// Note match (description does not contain the term).
+	rows, _ = svc.Register(ctx, RegisterFilter{Search: uniq + " reembolso"})
+	if len(rows) != 1 || rows[0].ID != other.ID {
+		t.Fatalf("note search = %+v; want only the noted row", rows)
+	}
+
+	// Search combines with the type filter: the unique token spans both expenses,
+	// but type=expense excludes any income (and pay is income anyway).
+	rows, _ = svc.Register(ctx, RegisterFilter{Search: uniq, Type: Expense})
+	if len(rows) != 2 {
+		t.Fatalf("search+type = %d rows; want 2 expenses", len(rows))
+	}
+	_ = pay
+}
+
 func findTx(t *testing.T, svc *Service, accountID, txID int64) Transaction {
 	t.Helper()
 	list, err := svc.List(context.Background(), accountID)

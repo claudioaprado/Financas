@@ -400,6 +400,11 @@ func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFil
 		if f.CategoryID != 0 && r.CategoryID != f.CategoryID {
 			continue
 		}
+		if q := strings.ToLower(strings.TrimSpace(f.Search)); q != "" &&
+			!strings.Contains(strings.ToLower(r.Description), q) &&
+			!strings.Contains(strings.ToLower(r.Note), q) {
+			continue
+		}
 		if f.AccountID != 0 {
 			match := false
 			for _, rr := range s.rows {
@@ -2221,6 +2226,23 @@ func TestTransactionsRegister(t *testing.T) {
 	body := recFil.Body.String()
 	if !strings.Contains(body, "wage") || strings.Contains(body, "food") {
 		t.Errorf("type=income filter should show wage and hide food; got %q", body)
+	}
+
+	// Search narrows by description (Story 10.3), case-insensitively, via HTMX.
+	recSearch := httptest.NewRecorder()
+	sr := httptest.NewRequest(http.MethodGet, "/transactions?q=FOO", nil)
+	sr.Header.Set("HX-Request", "true")
+	router.ServeHTTP(recSearch, withCookie(sr, cookie))
+	sb := recSearch.Body.String()
+	if !strings.Contains(sb, "food") || strings.Contains(sb, "wage") {
+		t.Errorf("q=FOO should show food and hide wage; got %q", sb)
+	}
+
+	// The full page renders the search box.
+	recBox := httptest.NewRecorder()
+	router.ServeHTTP(recBox, withCookie(httptest.NewRequest(http.MethodGet, "/transactions", nil), cookie))
+	if !strings.Contains(recBox.Body.String(), `name="q"`) {
+		t.Errorf("register page missing search box")
 	}
 }
 

@@ -1474,9 +1474,13 @@ templ TransactionsPage(data ShellData, v RegisterView) {
 				hx-get="/transactions"
 				hx-target="#tx-rows"
 				hx-swap="innerHTML"
-				hx-trigger="change"
+				hx-trigger="change, keyup changed delay:300ms"
 				class="mt-4 flex flex-wrap items-end gap-2"
 			>
+				<div>
+					<label class="block text-xs" for="q">Buscar</label>
+					<input id="q" name="q" type="search" value={ v.Query } placeholder="descrição ou nota" class="rounded border px-2 py-1"/>
+				</div>
 				<div>
 					<label class="block text-xs" for="account">Conta</label>
 					<select id="account" name="account" class="rounded border px-2 py-1">
@@ -1510,6 +1514,7 @@ templ TransactionsPage(data ShellData, v RegisterView) {
 				<input type="hidden" name="account" value={ accountID(v.SelAccount) }/>
 				<input type="hidden" name="type" value={ v.SelType }/>
 				<input type="hidden" name="category" value={ accountID(v.SelCategory) }/>
+				<input type="hidden" name="q" value={ v.Query }/>
 				if len(v.BulkCats) > 0 {
 					<div class="mt-4 flex flex-wrap items-end gap-2 rounded-card bg-surface p-3">
 						<span class="text-xs text-muted">Categorizar selecionadas (receita/despesa):</span>

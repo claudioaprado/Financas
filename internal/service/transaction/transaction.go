@@ -973,6 +973,7 @@ type RegisterFilter struct {
 	AccountID  int64
 	Type       TxType
 	CategoryID int64
+	Search     string // case-insensitive substring over description + note (Story 10.3)
 }
 
 // RegisterRow is one transaction formatted for the cross-account register.
@@ -1024,6 +1025,7 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 		return nil, err
 	}
 
+	search := strings.ToLower(strings.TrimSpace(f.Search))
 	out := make([]RegisterRow, 0, len(rows))
 	for _, r := range rows {
 		fromID, toID := nullID(r.FromAccountID), nullID(r.ToAccountID)
@@ -1037,6 +1039,12 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 			continue
 		}
 		if f.AccountID != 0 && fromID != f.AccountID && toID != f.AccountID {
+			continue
+		}
+		// Search matches the description or the note, case-insensitively (Story 10.3).
+		if search != "" &&
+			!strings.Contains(strings.ToLower(r.Description), search) &&
+			!strings.Contains(strings.ToLower(r.Note), search) {
 			continue
 		}
 		row := RegisterRow{
