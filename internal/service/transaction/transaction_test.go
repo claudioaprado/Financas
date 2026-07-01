@@ -473,3 +473,76 @@ func TestBulkCategorize(t *testing.T) {
 		t.Fatalf("missing id = %v; want ErrTxNotFound", err)
 	}
 }
+
+// TestAnnotate covers Story 10.2: setting a note and a reusable tag set, replacing
+// the set (removes/reuses), and surfacing them on the register — presentation
+// only, never touching balances.
+func TestAnnotate(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+	cash, err := accts.Create(ctx, fmt.Sprintf("Cash-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create cash: %v", err)
+	}
+	e, _ := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("15"), d(t, "2024-06-01"), "book", 0)
+	before, _ := svc.Balance(ctx, cash.ID)
+
+	// Set a note + two tags (one with surrounding space + a duplicate → deduped).
+	if err := svc.Annotate(ctx, e.ID, "gift for a friend", []string{"gift", " gift ", "books"}); err != nil {
+		t.Fatalf("annotate: %v", err)
+	}
+	got := findTx(t, svc, cash.ID, e.ID)
+	if got.Note != "gift for a friend" {
+		t.Fatalf("note = %q", got.Note)
+	}
+	if len(got.Tags) != 2 {
+		t.Fatalf("tags = %v; want 2 (deduped)", got.Tags)
+	}
+
+	// Balance is untouched by annotation (presentation only, AD-2).
+	after, _ := svc.Balance(ctx, cash.ID)
+	if !after.Amount().Equal(before.Amount()) {
+		t.Fatalf("annotate changed balance: %s -> %s", before.Amount(), after.Amount())
+	}
+
+	// Replacing the set removes "books" and keeps "gift"; note can be cleared.
+	if err := svc.Annotate(ctx, e.ID, "", []string{"gift"}); err != nil {
+		t.Fatalf("re-annotate: %v", err)
+	}
+	got = findTx(t, svc, cash.ID, e.ID)
+	if got.Note != "" || len(got.Tags) != 1 || got.Tags[0] != "gift" {
+		t.Fatalf("after replace: note=%q tags=%v", got.Note, got.Tags)
+	}
+
+	// A missing transaction is rejected.
+	if err := svc.Annotate(ctx, 999999, "x", nil); !errors.Is(err, ErrTxNotFound) {
+		t.Fatalf("annotate missing = %v; want ErrTxNotFound", err)
+	}
+}
+
+func findTx(t *testing.T, svc *Service, accountID, txID int64) Transaction {
+	t.Helper()
+	list, err := svc.List(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, r := range list {
+		if r.ID == txID {
+			return r
+		}
+	}
+	t.Fatalf("tx %d not found", txID)
+	return Transaction{}
+}

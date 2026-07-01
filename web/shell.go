@@ -280,6 +280,9 @@ type TxRow struct {
 	Security     string // security symbol for trade rows (buy/sell/dividend)
 	Quantity     string // shares for trade rows
 	Price        string // per-share price for trade rows
+	Note         string   // free-text annotation (Story 10.2)
+	Tags         []string // reusable labels (Story 10.2)
+	TagsCSV      string   // Tags joined for the annotate-form input value
 }
 
 // HoldingRow is one derived position on an investment account's detail page
@@ -504,7 +507,9 @@ type RegisterRow struct {
 	Amount      string
 	Incoming    bool
 	IsTransfer  bool
-	Editable    bool // income/expense: shows a bulk-select checkbox (Story 10.1)
+	Editable    bool     // income/expense: shows a bulk-select checkbox (Story 10.1)
+	Note        string   // free-text annotation (Story 10.2)
+	Tags        []string // reusable labels (Story 10.2)
 }
 
 // RegisterView is the cross-account register page state (/transactions). It grows

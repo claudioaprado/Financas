@@ -94,6 +94,12 @@ type Security struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Tag struct {
+	ID        int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
 type Transaction struct {
 	ID            int64
 	Type          string
@@ -111,4 +117,10 @@ type Transaction struct {
 	Price         decimal.Decimal
 	Fees          decimal.Decimal
 	Fitid         pgtype.Text
+	Note          string
+}
+
+type TransactionTag struct {
+	TransactionID int64
+	TagID         int64
 }

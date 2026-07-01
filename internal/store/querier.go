@@ -15,6 +15,7 @@ import (
 type Querier interface {
 	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
 	AddPrice(ctx context.Context, arg AddPriceParams) (Price, error)
+	AddTransactionTag(ctx context.Context, arg AddTransactionTagParams) error
 	// Assign one category to many transactions in a single statement (Story 10.1,
 	// one tx AD-3). The type guard scopes the write to rows matching the category's
 	// kind, so a transfer/trade id can never be categorized even if submitted.
@@ -46,6 +47,8 @@ type Querier interface {
 	DeleteCategoryRule(ctx context.Context, id int64) (int64, error)
 	DeleteRecurring(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
+	// Clear a transaction's tag links (the annotate use-case replaces the whole set).
+	DeleteTransactionTags(ctx context.Context, transactionID int64) error
 	// Full-row export queries for Story 6.1 (authored-data backup). Each SELECT
 	// lists exactly its table's columns and ORDERs BY id, so sqlc returns the
 	// existing model structs (store.Account/Category/Security/ExchangeRate/Price/
@@ -65,6 +68,8 @@ type Querier interface {
 	GetRecurringForUpdate(ctx context.Context, id int64) (Recurring, error)
 	GetSecurity(ctx context.Context, id int64) (Security, error)
 	GetSecurityBySymbol(ctx context.Context, symbol string) (Security, error)
+	// Notes & tags (Story 10.2 / FR-21). Presentation metadata only.
+	GetTransaction(ctx context.Context, id int64) (Transaction, error)
 	// $1 is cast to a calendar DATE so "effective on or before today" is a stable
 	// date-to-date comparison (no sub-day/timezone boundary flapping when an instant
 	// is passed).
@@ -88,7 +93,7 @@ type Querier interface {
 	// domain sees a stable sequence.
 	ListCategorizedForBudget(ctx context.Context, occurredOn time.Time) ([]ListCategorizedForBudgetRow, error)
 	ListCategoryRules(ctx context.Context) ([]ListCategoryRulesRow, error)
-	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
+	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]ListCategoryTransactionsRow, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
 	// Spending & cash-flow analytics (Story 8.3 / FR-19). Every income/expense
@@ -105,11 +110,16 @@ type Querier interface {
 	// by next_due then id so the soonest-due surface first.
 	ListRecurring(ctx context.Context) ([]ListRecurringRow, error)
 	ListSecurities(ctx context.Context) ([]Security, error)
+	// Tag names for many transactions at once (register/detail display), so the
+	// service maps them without an N+1 per row.
+	ListTagsForTransactions(ctx context.Context, dollar_1 []int64) ([]ListTagsForTransactionsRow, error)
 	// The (id, type) of the given transactions, for validating a bulk-categorize
 	// selection (Story 10.1): every selected row must exist and be income/expense of
 	// the category's kind. Transfers/trades are returned with their type so the
 	// service can reject them (they are not categorizable, AD-9).
 	ListTransactionKindsByIDs(ctx context.Context, dollar_1 []int64) ([]ListTransactionKindsByIDsRow, error)
+	// One transaction's tag names, alphabetical (detail/edit view).
+	ListTransactionTags(ctx context.Context, transactionID int64) ([]ListTransactionTagsRow, error)
 	ListTransactions(ctx context.Context) ([]Transaction, error)
 	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
@@ -145,9 +155,12 @@ type Querier interface {
 	// the categories list).
 	SetBudget(ctx context.Context, arg SetBudgetParams) (Budget, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
+	SetTransactionNote(ctx context.Context, arg SetTransactionNoteParams) (int64, error)
 	UpdateRecurring(ctx context.Context, arg UpdateRecurringParams) (int64, error)
 	UpdateRecurringNextDue(ctx context.Context, arg UpdateRecurringNextDueParams) (int64, error)
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (int64, error)
+	// Create-on-use: return the tag whether it already existed or is newly inserted.
+	UpsertTag(ctx context.Context, name string) (Tag, error)
 }
 
 var _ Querier = (*Queries)(nil)

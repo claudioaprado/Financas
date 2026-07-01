@@ -22,7 +22,7 @@ SELECT id, security_id, effective_date, price, created_at FROM price ORDER BY id
 
 -- name: ExportTransactions :many
 SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on,
-       description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
+       description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
 FROM transaction ORDER BY id;
 
 -- Restore queries for Story 6.2 (recover from a 6.1 export). Restore is a
@@ -78,9 +78,9 @@ VALUES ($1, $2, $3, $4, $5);
 -- name: RestoreInsertTransaction :exec
 INSERT INTO transaction (id, type, from_account_id, to_account_id, from_amount, to_amount,
                          occurred_on, description, created_at, category_id, import_hash,
-                         security_id, quantity, price, fees, fitid)
+                         security_id, quantity, price, fees, fitid, note)
 OVERRIDING SYSTEM VALUE
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
 
 -- name: RestoreResetAccountSeq :exec
 SELECT setval(pg_get_serial_sequence('account', 'id'),

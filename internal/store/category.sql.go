@@ -7,8 +7,10 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
 )
 
 const categoryUsageCounts = `-- name: CategoryUsageCounts :many
@@ -142,15 +144,34 @@ WHERE category_id = $1
 ORDER BY occurred_on DESC, id DESC
 `
 
-func (q *Queries) ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error) {
+type ListCategoryTransactionsRow struct {
+	ID            int64
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	FromAmount    decimal.Decimal
+	ToAmount      decimal.Decimal
+	OccurredOn    time.Time
+	Description   string
+	CreatedAt     pgtype.Timestamptz
+	CategoryID    pgtype.Int8
+	ImportHash    pgtype.Text
+	SecurityID    pgtype.Int8
+	Quantity      decimal.Decimal
+	Price         decimal.Decimal
+	Fees          decimal.Decimal
+	Fitid         pgtype.Text
+}
+
+func (q *Queries) ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]ListCategoryTransactionsRow, error) {
 	rows, err := q.db.Query(ctx, listCategoryTransactions, categoryID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Transaction{}
+	items := []ListCategoryTransactionsRow{}
 	for rows.Next() {
-		var i Transaction
+		var i ListCategoryTransactionsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Type,

@@ -179,6 +179,8 @@ type stubTransactions struct {
 	oversold     []string // symbols returned as inconsistent (oversold) by Holdings
 	bulkIDs      []int64  // last BulkCategorize selection (Story 10.1)
 	bulkCategory int64    // last BulkCategorize target category
+	noteByID     map[int64]string   // last Annotate note per tx (Story 10.2)
+	tagsByID     map[int64][]string // last Annotate tags per tx
 }
 
 type stubHolding struct {
@@ -421,6 +423,8 @@ func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFil
 			Incoming:    r.Incoming,
 			IsTransfer:  r.Type == transaction.Transfer,
 			Editable:    r.Type == transaction.Income || r.Type == transaction.Expense,
+			Note:        r.Note,
+			Tags:        r.Tags,
 		})
 	}
 	return out, nil
@@ -444,6 +448,26 @@ func (s *stubTransactions) BulkCategorize(_ context.Context, ids []int64, catego
 		}
 	}
 	return n, nil
+}
+
+func (s *stubTransactions) Annotate(_ context.Context, txID int64, note string, tags []string) error {
+	found := false
+	for i := range s.rows {
+		if s.rows[i].ID == txID {
+			found = true
+			s.rows[i].Note = note
+			s.rows[i].Tags = tags
+		}
+	}
+	if !found {
+		return transaction.ErrTxNotFound
+	}
+	if s.noteByID == nil {
+		s.noteByID = map[int64]string{}
+		s.tagsByID = map[int64][]string{}
+	}
+	s.noteByID[txID], s.tagsByID[txID] = note, tags
+	return nil
 }
 
 // stubCategories is an in-memory Categories for handler tests.
@@ -2252,6 +2276,47 @@ func TestTransactionsBulkCategorize(t *testing.T) {
 	router.ServeHTTP(recEmpty, withCookie(empty, cookie))
 	if recEmpty.Code != http.StatusBadRequest || !strings.Contains(recEmpty.Body.String(), "Selecione ao menos uma") {
 		t.Fatalf("empty bulk = %d, want 400 with message; body=%s", recEmpty.Code, recEmpty.Body.String())
+	}
+}
+
+// TestTxAnnotate covers Story 10.2: saving a note + comma-separated tags on a
+// transaction and re-rendering the edit view with them pre-filled.
+func TestTxAnnotate(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		return rec
+	}
+
+	post("/accounts", "name=Acc&type=cash&currency=USD")
+	post("/accounts/1/transaction", "type=expense&amount=15&date=2024-08-02&description=book")
+
+	// Annotate: note + comma-separated tags (trimmed).
+	recA := post("/accounts/1/transaction/annotate", "tx_id=1&note=gift&tags=gift,%20books")
+	if recA.Code != http.StatusSeeOther || recA.Header().Get("Location") != "/accounts/1?edit=1" {
+		t.Fatalf("annotate = %d -> %q, want 303 -> /accounts/1?edit=1", recA.Code, recA.Header().Get("Location"))
+	}
+
+	// The edit view re-renders with the note + tags form and the saved values.
+	recEdit := httptest.NewRecorder()
+	router.ServeHTTP(recEdit, withCookie(httptest.NewRequest(http.MethodGet, "/accounts/1?edit=1", nil), cookie))
+	body := recEdit.Body.String()
+	if !strings.Contains(body, "Notas e etiquetas") || !strings.Contains(body, `value="gift"`) {
+		t.Fatalf("edit view missing annotate form/prefill:\n%s", body)
+	}
+
+	// A bad tx id is rejected.
+	recBad := post("/accounts/1/transaction/annotate", "tx_id=abc&note=x")
+	if recBad.Code != http.StatusBadRequest {
+		t.Fatalf("annotate bad id = %d, want 400", recBad.Code)
 	}
 }
 

@@ -97,6 +97,7 @@ type Transactions interface {
 	CategoryTransactions(ctx context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error)
 	Register(ctx context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error)
 	BulkCategorize(ctx context.Context, ids []int64, categoryID int64) (int, error)
+	Annotate(ctx context.Context, txID int64, note string, tags []string) error
 	// Investment trades (Story 4.2).
 	Buy(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
 	Sell(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
@@ -260,6 +261,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Post("/accounts/{id}/transaction", txCreate(deps))
 		pr.Post("/accounts/{id}/transaction/edit", txEdit(deps))
 		pr.Post("/accounts/{id}/transaction/delete", txDelete(deps))
+		pr.Post("/accounts/{id}/transaction/annotate", txAnnotate(deps))
 		pr.Post("/accounts/{id}/transfer", txTransfer(deps))
 		pr.Post("/accounts/{id}/buy", tradeBuy(deps))
 		pr.Post("/accounts/{id}/sell", tradeSell(deps))
@@ -781,6 +783,48 @@ func txDelete(deps Deps) http.HandlerFunc {
 	}
 }
 
+// txAnnotate saves a transaction's note and tag set (Story 10.2). Tags arrive as
+// a comma-separated field; the service trims/dedupes/creates-on-use and replaces
+// the whole set in one tx (AD-3). It redirects back to the account, keeping the
+// row open for editing so the saved note/tags are visible.
+func txAnnotate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		acctID, ok := parsePathID(req)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		txID, err := strconv.ParseInt(req.PostFormValue("tx_id"), 10, 64)
+		if err != nil {
+			renderAccountDetail(deps, w, req, acctID, 0, "ID de transação inválido.", http.StatusBadRequest)
+			return
+		}
+		note := req.PostFormValue("note")
+		tags := splitTags(req.PostFormValue("tags"))
+		if err := deps.Transactions.Annotate(req.Context(), txID, note, tags); err != nil {
+			renderAccountDetail(deps, w, req, acctID, txID, problemMsg(req, "Não foi possível salvar as notas e etiquetas. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, accountPath(acctID)+"?edit="+accountIDStr(txID), http.StatusSeeOther)
+	}
+}
+
+// splitTags parses a comma-separated tags field into trimmed, non-empty names.
+// The service is the authority for further dedupe/validation.
+func splitTags(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// accountIDStr renders an id for a query string (thin wrapper for readability).
+func accountIDStr(id int64) string { return strconv.FormatInt(id, 10) }
+
 func txTransfer(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		acctID, ok := parsePathID(req)
@@ -1207,6 +1251,8 @@ func mapRegisterRows(regRows []transaction.RegisterRow) []web.RegisterRow {
 			Incoming:    r.Incoming,
 			IsTransfer:  r.IsTransfer,
 			Editable:    r.Editable,
+			Note:        r.Note,
+			Tags:        r.Tags,
 		})
 	}
 	return rows
@@ -2104,6 +2150,9 @@ func renderAccountDetail(deps Deps, w http.ResponseWriter, req *http.Request, ac
 				Signed:       sign + money.New(t.Amount, acct.Currency).Display(),
 				Incoming:     t.Incoming,
 				Editable:     t.Type != transaction.Transfer,
+				Note:         t.Note,
+				Tags:         t.Tags,
+				TagsCSV:      strings.Join(t.Tags, ", "),
 			}
 			rows = append(rows, row)
 			if editID != 0 && t.ID == editID && row.Editable {

@@ -174,7 +174,7 @@ func (q *Queries) ExportSecurities(ctx context.Context) ([]Security, error) {
 
 const exportTransactions = `-- name: ExportTransactions :many
 SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on,
-       description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
+       description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
 FROM transaction ORDER BY id
 `
 
@@ -204,6 +204,7 @@ func (q *Queries) ExportTransactions(ctx context.Context) ([]Transaction, error)
 			&i.Price,
 			&i.Fees,
 			&i.Fitid,
+			&i.Note,
 		); err != nil {
 			return nil, err
 		}
@@ -408,9 +409,9 @@ func (q *Queries) RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSe
 const restoreInsertTransaction = `-- name: RestoreInsertTransaction :exec
 INSERT INTO transaction (id, type, from_account_id, to_account_id, from_amount, to_amount,
                          occurred_on, description, created_at, category_id, import_hash,
-                         security_id, quantity, price, fees, fitid)
+                         security_id, quantity, price, fees, fitid, note)
 OVERRIDING SYSTEM VALUE
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 `
 
 type RestoreInsertTransactionParams struct {
@@ -430,6 +431,7 @@ type RestoreInsertTransactionParams struct {
 	Price         decimal.Decimal
 	Fees          decimal.Decimal
 	Fitid         pgtype.Text
+	Note          string
 }
 
 func (q *Queries) RestoreInsertTransaction(ctx context.Context, arg RestoreInsertTransactionParams) error {
@@ -450,6 +452,7 @@ func (q *Queries) RestoreInsertTransaction(ctx context.Context, arg RestoreInser
 		arg.Price,
 		arg.Fees,
 		arg.Fitid,
+		arg.Note,
 	)
 	return err
 }

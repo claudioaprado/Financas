@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -102,6 +103,8 @@ type Transaction struct {
 	Price        decimal.Decimal
 	Date         time.Time
 	Description  string
+	Note         string   // free-text annotation (Story 10.2); presentation only
+	Tags         []string // reusable labels (Story 10.2); presentation only
 	CreatedAt    time.Time
 }
 
@@ -658,10 +661,36 @@ func (s *Service) List(ctx context.Context, accountID int64) ([]Transaction, err
 		return nil, err
 	}
 	out := make([]Transaction, len(rows))
+	ids := make([]int64, len(rows))
 	for i, r := range rows {
 		out[i] = toTransaction(accountID, r, names, catNames, secNames)
+		ids[i] = r.ID
+	}
+	tags, err := loadTags(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Tags = tags[out[i].ID]
 	}
 	return out, nil
+}
+
+// loadTags batch-loads the tag names for the given transaction ids into an
+// id→names map, avoiding an N+1 query per register/detail row (Story 10.2).
+func loadTags(ctx context.Context, q *store.Queries, ids []int64) (map[int64][]string, error) {
+	if len(ids) == 0 {
+		return map[int64][]string{}, nil
+	}
+	rows, err := q.ListTagsForTransactions(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("transaction: list tags: %w", err)
+	}
+	m := make(map[int64][]string, len(rows))
+	for _, r := range rows {
+		m[r.TransactionID] = append(m[r.TransactionID], r.Name)
+	}
+	return m, nil
 }
 
 // securitySymbols builds an id->symbol map for resolving a trade row's label.
@@ -827,6 +856,69 @@ func (s *Service) BulkCategorize(ctx context.Context, ids []int64, categoryID in
 	return int(n), nil
 }
 
+// Annotate sets a transaction's free-text note and REPLACES its tag set (Story
+// 10.2 / FR-21) in one DB transaction (AD-3). Tags are reusable labels created on
+// use (upserted by name) and deduped; passing a name that already exists reuses
+// it, omitting a name removes that link (the whole set is replaced). Notes/tags
+// are presentation metadata — they never touch balances, budgets, or valuation
+// (AD-2). A missing transaction returns ErrTxNotFound.
+func (s *Service) Annotate(ctx context.Context, txID int64, note string, tags []string) error {
+	clean := cleanTags(tags)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("transaction: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := store.New(tx)
+
+	n, err := q.SetTransactionNote(ctx, store.SetTransactionNoteParams{ID: txID, Note: note})
+	if err != nil {
+		return fmt.Errorf("transaction: set note: %w", err)
+	}
+	if n == 0 {
+		return ErrTxNotFound
+	}
+
+	// Replace the whole tag set: clear existing links, then re-add the cleaned set.
+	if err := q.DeleteTransactionTags(ctx, txID); err != nil {
+		return fmt.Errorf("transaction: clear tags: %w", err)
+	}
+	for _, name := range clean {
+		tag, err := q.UpsertTag(ctx, name)
+		if err != nil {
+			return fmt.Errorf("transaction: upsert tag: %w", err)
+		}
+		if err := q.AddTransactionTag(ctx, store.AddTransactionTagParams{TransactionID: txID, TagID: tag.ID}); err != nil {
+			return fmt.Errorf("transaction: add tag: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("transaction: commit: %w", err)
+	}
+	return nil
+}
+
+// cleanTags trims, drops empties, and dedupes tag names (case-insensitive dedupe,
+// preserving the first-seen spelling and order).
+func cleanTags(tags []string) []string {
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		name := strings.TrimSpace(t)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 // dedupeIDs drops zero and duplicate ids, preserving first-seen order.
 func dedupeIDs(ids []int64) []int64 {
 	seen := make(map[int64]bool, len(ids))
@@ -900,7 +992,9 @@ type RegisterRow struct {
 	Incoming      bool
 	IsTransfer    bool
 	CrossCurrency bool
-	Editable      bool // income/expense (categorizable/bulk-selectable); false for transfers/trades
+	Editable      bool     // income/expense (categorizable/bulk-selectable); false for transfers/trades
+	Note          string   // free-text annotation (Story 10.2)
+	Tags          []string // reusable labels (Story 10.2)
 }
 
 // Register returns the ledger newest-first, narrowed by the filter and enriched
@@ -953,6 +1047,7 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 			Category:    catNames[catID],
 			Security:    secNames[secID],
 			Editable:    typ == Income || typ == Expense,
+			Note:        r.Note,
 		}
 		switch typ {
 		case Income, Sell, Dividend:
@@ -975,6 +1070,17 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 		}
 		out = append(out, row)
 	}
+	ids := make([]int64, len(out))
+	for i := range out {
+		ids[i] = out[i].ID
+	}
+	tags, err := loadTags(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Tags = tags[out[i].ID]
+	}
 	return out, nil
 }
 
@@ -993,6 +1099,7 @@ func toTransaction(accountID int64, r store.Transaction, names, catNames, secNam
 		Price:        r.Price,
 		Date:         r.OccurredOn,
 		Description:  r.Description,
+		Note:         r.Note,
 		CreatedAt:    r.CreatedAt.Time,
 	}
 	fromID, toID := nullID(r.FromAccountID), nullID(r.ToAccountID)

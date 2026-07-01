@@ -13,6 +13,22 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const addTransactionTag = `-- name: AddTransactionTag :exec
+INSERT INTO transaction_tag (transaction_id, tag_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type AddTransactionTagParams struct {
+	TransactionID int64
+	TagID         int64
+}
+
+func (q *Queries) AddTransactionTag(ctx context.Context, arg AddTransactionTagParams) error {
+	_, err := q.db.Exec(ctx, addTransactionTag, arg.TransactionID, arg.TagID)
+	return err
+}
+
 const bulkSetCategory = `-- name: BulkSetCategory :execrows
 UPDATE transaction SET category_id = $1 WHERE id = ANY($2::bigint[]) AND type = $3
 `
@@ -110,7 +126,7 @@ func (q *Queries) CreateOFXTransaction(ctx context.Context, arg CreateOFXTransac
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, category_id, security_id, quantity, price, fees)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
+RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
 `
 
 type CreateTransactionParams struct {
@@ -161,6 +177,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.Price,
 		&i.Fees,
 		&i.Fitid,
+		&i.Note,
 	)
 	return i, err
 }
@@ -175,6 +192,48 @@ func (q *Queries) DeleteTransaction(ctx context.Context, id int64) (int64, error
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteTransactionTags = `-- name: DeleteTransactionTags :exec
+DELETE FROM transaction_tag WHERE transaction_id = $1
+`
+
+// Clear a transaction's tag links (the annotate use-case replaces the whole set).
+func (q *Queries) DeleteTransactionTags(ctx context.Context, transactionID int64) error {
+	_, err := q.db.Exec(ctx, deleteTransactionTags, transactionID)
+	return err
+}
+
+const getTransaction = `-- name: GetTransaction :one
+
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
+FROM transaction WHERE id = $1
+`
+
+// Notes & tags (Story 10.2 / FR-21). Presentation metadata only.
+func (q *Queries) GetTransaction(ctx context.Context, id int64) (Transaction, error) {
+	row := q.db.QueryRow(ctx, getTransaction, id)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.FromAccountID,
+		&i.ToAccountID,
+		&i.FromAmount,
+		&i.ToAmount,
+		&i.OccurredOn,
+		&i.Description,
+		&i.CreatedAt,
+		&i.CategoryID,
+		&i.ImportHash,
+		&i.SecurityID,
+		&i.Quantity,
+		&i.Price,
+		&i.Fees,
+		&i.Fitid,
+		&i.Note,
+	)
+	return i, err
 }
 
 const listAccountFitids = `-- name: ListAccountFitids :many
@@ -230,7 +289,7 @@ func (q *Queries) ListAccountImportHashes(ctx context.Context, fromAccountID pgt
 }
 
 const listAccountTransactions = `-- name: ListAccountTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
 FROM transaction
 WHERE from_account_id = $1 OR to_account_id = $1
 ORDER BY occurred_on DESC, id DESC
@@ -262,7 +321,43 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 			&i.Price,
 			&i.Fees,
 			&i.Fitid,
+			&i.Note,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTagsForTransactions = `-- name: ListTagsForTransactions :many
+SELECT tt.transaction_id, t.name
+FROM transaction_tag tt
+JOIN tag t ON t.id = tt.tag_id
+WHERE tt.transaction_id = ANY($1::bigint[])
+ORDER BY tt.transaction_id, t.name
+`
+
+type ListTagsForTransactionsRow struct {
+	TransactionID int64
+	Name          string
+}
+
+// Tag names for many transactions at once (register/detail display), so the
+// service maps them without an N+1 per row.
+func (q *Queries) ListTagsForTransactions(ctx context.Context, dollar_1 []int64) ([]ListTagsForTransactionsRow, error) {
+	rows, err := q.db.Query(ctx, listTagsForTransactions, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTagsForTransactionsRow{}
+	for rows.Next() {
+		var i ListTagsForTransactionsRow
+		if err := rows.Scan(&i.TransactionID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -306,8 +401,42 @@ func (q *Queries) ListTransactionKindsByIDs(ctx context.Context, dollar_1 []int6
 	return items, nil
 }
 
+const listTransactionTags = `-- name: ListTransactionTags :many
+SELECT t.id, t.name
+FROM tag t
+JOIN transaction_tag tt ON tt.tag_id = t.id
+WHERE tt.transaction_id = $1
+ORDER BY t.name
+`
+
+type ListTransactionTagsRow struct {
+	ID   int64
+	Name string
+}
+
+// One transaction's tag names, alphabetical (detail/edit view).
+func (q *Queries) ListTransactionTags(ctx context.Context, transactionID int64) ([]ListTransactionTagsRow, error) {
+	rows, err := q.db.Query(ctx, listTransactionTags, transactionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTransactionTagsRow{}
+	for rows.Next() {
+		var i ListTransactionTagsRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid, note
 FROM transaction
 ORDER BY occurred_on DESC, id DESC
 `
@@ -338,6 +467,7 @@ func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
 			&i.Price,
 			&i.Fees,
 			&i.Fitid,
+			&i.Note,
 		); err != nil {
 			return nil, err
 		}
@@ -347,6 +477,23 @@ func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setTransactionNote = `-- name: SetTransactionNote :execrows
+UPDATE transaction SET note = $2 WHERE id = $1
+`
+
+type SetTransactionNoteParams struct {
+	ID   int64
+	Note string
+}
+
+func (q *Queries) SetTransactionNote(ctx context.Context, arg SetTransactionNoteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setTransactionNote, arg.ID, arg.Note)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateTransaction = `-- name: UpdateTransaction :execrows
@@ -383,4 +530,18 @@ func (q *Queries) UpdateTransaction(ctx context.Context, arg UpdateTransactionPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertTag = `-- name: UpsertTag :one
+INSERT INTO tag (name) VALUES ($1)
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id, name, created_at
+`
+
+// Create-on-use: return the tag whether it already existed or is newly inserted.
+func (q *Queries) UpsertTag(ctx context.Context, name string) (Tag, error) {
+	row := q.db.QueryRow(ctx, upsertTag, name)
+	var i Tag
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
 }

@@ -753,6 +753,21 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 					<a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-sm text-accent hover:underline">Cancelar</a>
 				}
 			</form>
+			if editing {
+				<h2 class="mt-6 text-sm font-semibold text-muted">Notas e etiquetas</h2>
+				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transaction/annotate") } class="mt-2 flex flex-wrap items-end gap-2">
+					<input type="hidden" name="tx_id" value={ accountID(edit.ID) }/>
+					<div>
+						<label class="block text-xs" for="note">Nota</label>
+						<input id="note" name="note" value={ edit.Note } class="w-64 rounded border px-2 py-1" placeholder="anotação livre"/>
+					</div>
+					<div>
+						<label class="block text-xs" for="tags">Etiquetas (separadas por vírgula)</label>
+						<input id="tags" name="tags" value={ edit.TagsCSV } class="w-64 rounded border px-2 py-1" placeholder="p.ex. viagem, reembolsável"/>
+					</div>
+					<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Salvar notas</button>
+				</form>
+			}
 			if len(transferTargets) > 0 {
 				<h2 class="mt-6 text-sm font-semibold text-muted">Transferir para outra conta</h2>
 				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/transfer") } class="mt-2 flex flex-wrap items-end gap-2">
@@ -814,6 +829,12 @@ templ AccountDetailPage(data ShellData, acctID int64, name, accType, currency, b
 								}
 								if tr.Category != "" {
 									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ tr.Category }</span>
+								}
+								for _, tag := range tr.Tags {
+									<span class="ml-1 rounded-full bg-accent/10 px-2 text-xs text-accent">{ tag }</span>
+								}
+								if tr.Note != "" {
+									<p class="text-xs text-muted">{ tr.Note }</p>
 								}
 							</td>
 							<td class={ "text-right", templ.KV("text-gain", tr.Incoming), templ.KV("text-loss", !tr.Incoming) }>{ tr.Signed }</td>
@@ -1540,6 +1561,12 @@ templ TransactionRows(rows []RegisterRow) {
 				{ r.Description }
 				if r.Category != "" {
 					<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">{ r.Category }</span>
+				}
+				for _, tag := range r.Tags {
+					<span class="ml-1 rounded-full bg-accent/10 px-2 text-xs text-accent">{ tag }</span>
+				}
+				if r.Note != "" {
+					<span class="ml-1 text-xs text-muted" title={ r.Note }>📝</span>
 				}
 			</td>
 			<td class={ "text-right", templ.KV("text-gain", r.Incoming && !r.IsTransfer), templ.KV("text-loss", !r.Incoming && !r.IsTransfer) }>{ r.Amount }</td>
