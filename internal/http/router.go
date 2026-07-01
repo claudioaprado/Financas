@@ -479,6 +479,12 @@ func knownErrMsg(err error) (string, bool) {
 		return "O tipo da categoria deve combinar com o tipo da transação.", true
 	case errors.Is(err, transaction.ErrNoSelection):
 		return "Selecione ao menos uma transação.", true
+	case errors.Is(err, transaction.ErrNoteTooLong):
+		return "A nota é longa demais.", true
+	case errors.Is(err, transaction.ErrTooManyTags):
+		return "Etiquetas demais nesta transação.", true
+	case errors.Is(err, transaction.ErrTagTooLong):
+		return "O nome de uma etiqueta é longo demais.", true
 	case errors.Is(err, transaction.ErrNotInvestmentAccount):
 		return "Compra, venda e dividendo exigem uma conta de investimento.", true
 	case errors.Is(err, transaction.ErrSecurityNotFound):

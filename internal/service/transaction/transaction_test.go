@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -529,6 +530,21 @@ func TestAnnotate(t *testing.T) {
 	// A missing transaction is rejected.
 	if err := svc.Annotate(ctx, 999999, "x", nil); !errors.Is(err, ErrTxNotFound) {
 		t.Fatalf("annotate missing = %v; want ErrTxNotFound", err)
+	}
+
+	// Input-size guards (Story 10.2 hardening) reject before touching the DB.
+	if err := svc.Annotate(ctx, e.ID, strings.Repeat("x", MaxNoteLen+1), nil); !errors.Is(err, ErrNoteTooLong) {
+		t.Fatalf("long note = %v; want ErrNoteTooLong", err)
+	}
+	many := make([]string, MaxTags+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("t%d", i)
+	}
+	if err := svc.Annotate(ctx, e.ID, "", many); !errors.Is(err, ErrTooManyTags) {
+		t.Fatalf("too many tags = %v; want ErrTooManyTags", err)
+	}
+	if err := svc.Annotate(ctx, e.ID, "", []string{strings.Repeat("y", MaxTagLen+1)}); !errors.Is(err, ErrTagTooLong) {
+		t.Fatalf("long tag = %v; want ErrTagTooLong", err)
 	}
 }
 

@@ -81,6 +81,18 @@ var (
 	ErrOversold = errors.New("transaction: sell exceeds holdings")
 	// ErrNoSelection is returned when a bulk operation receives no rows.
 	ErrNoSelection = errors.New("transaction: no rows selected")
+	// Annotation input-size guards (Story 10.2 hardening).
+	ErrNoteTooLong = errors.New("transaction: note is too long")
+	ErrTooManyTags = errors.New("transaction: too many tags")
+	ErrTagTooLong  = errors.New("transaction: tag name is too long")
+)
+
+// Annotation input limits (Story 10.2). Generous for real use, bounded against
+// abuse: notes and tags are presentation metadata, not documents.
+const (
+	MaxNoteLen = 2000 // characters in a transaction note
+	MaxTags    = 50   // tags per transaction
+	MaxTagLen  = 100  // characters in a single tag name
 )
 
 // Transaction is one row formatted for a specific account's register. Amount is
@@ -814,20 +826,22 @@ func (s *Service) BulkCategorize(ctx context.Context, ids []int64, categoryID in
 		return 0, ErrNoSelection
 	}
 
-	cat, err := store.New(s.pool).GetCategory(ctx, categoryID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, ErrCategoryNotFound
-	}
-	if err != nil {
-		return 0, fmt.Errorf("transaction: get category: %w", err)
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("transaction: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := store.New(tx)
+
+	// Read the category on the SAME tx as the write so it can't be deleted between
+	// the kind check and the UPDATE (no TOCTOU; consistent with the AD-3 contract).
+	cat, err := q.GetCategory(ctx, categoryID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrCategoryNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("transaction: get category: %w", err)
+	}
 
 	kinds, err := q.ListTransactionKindsByIDs(ctx, uniq)
 	if err != nil {
@@ -863,7 +877,20 @@ func (s *Service) BulkCategorize(ctx context.Context, ids []int64, categoryID in
 // are presentation metadata — they never touch balances, budgets, or valuation
 // (AD-2). A missing transaction returns ErrTxNotFound.
 func (s *Service) Annotate(ctx context.Context, txID int64, note string, tags []string) error {
+	// Bound the input before touching the DB: an unbounded note or tag list would
+	// be a DoS vector (WAL bloat, a long insert loop) for no legitimate use.
+	if len(note) > MaxNoteLen {
+		return ErrNoteTooLong
+	}
 	clean := cleanTags(tags)
+	if len(clean) > MaxTags {
+		return ErrTooManyTags
+	}
+	for _, t := range clean {
+		if len(t) > MaxTagLen {
+			return ErrTagTooLong
+		}
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
