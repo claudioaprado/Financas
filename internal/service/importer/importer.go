@@ -26,8 +26,9 @@ var (
 // re-importable) — Status stays "new".
 type PreviewRow struct {
 	ParsedRow
-	Status  string // "new" | "duplicate" | "error"
-	Warning string // non-empty when the row imports with a caveat (e.g. no FITID)
+	Status              string // "new" | "duplicate" | "error"
+	Warning             string // non-empty when the row imports with a caveat (e.g. no FITID)
+	SuggestedCategoryID int64  // auto-categorization suggestion for a new row (0 = none), FR-17
 }
 
 // Result summarizes a preview or commit.
@@ -61,12 +62,18 @@ func (s *Service) Preview(ctx context.Context, accountID int64, content string) 
 	if err != nil {
 		return Result{}, err
 	}
-	return classify(acct, content, existing), nil
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	return classify(acct, content, existing, rules), nil
 }
 
 // Commit parses content and inserts every new (non-duplicate, non-error) row in
-// one transaction (AD-3). It returns the same Result as Preview.
-func (s *Service) Commit(ctx context.Context, accountID int64, content string) (Result, error) {
+// one transaction (AD-3). cats carries the owner's per-row category choice
+// (keyed by ParsedRow.Line; absent ⇒ use the row's suggestion). It returns the
+// same Result as Preview.
+func (s *Service) Commit(ctx context.Context, accountID int64, content string, cats map[int]int64) (Result, error) {
 	acct, err := s.account(ctx, accountID)
 	if err != nil {
 		return Result{}, err
@@ -75,9 +82,17 @@ func (s *Service) Commit(ctx context.Context, accountID int64, content string) (
 	if err != nil {
 		return Result{}, err
 	}
-	res := classify(acct, content, existing)
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	res := classify(acct, content, existing, rules)
 	if res.New == 0 {
 		return res, nil
+	}
+	kinds, err := s.categoryKinds(ctx)
+	if err != nil {
+		return Result{}, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -101,6 +116,7 @@ func (s *Service) Commit(ctx context.Context, accountID int64, content string) (
 			OccurredOn:    r.Date,
 			Description:   r.Description,
 			ImportHash:    pgtype.Text{String: rowHash(acct.ID, r.ParsedRow), Valid: true},
+			CategoryID:    resolveCategory(r, cats, kinds),
 		}); err != nil {
 			return Result{}, fmt.Errorf("importer: insert line %d: %w", r.Line, err)
 		}
@@ -122,13 +138,18 @@ func (s *Service) PreviewOFX(ctx context.Context, accountID int64, content strin
 	if err != nil {
 		return Result{}, err
 	}
-	return classifyOFX(acct, content, existing), nil
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	return classifyOFX(acct, content, existing, rules), nil
 }
 
 // CommitOFX parses an OFX statement and inserts every new row in one transaction
 // (AD-3). Rows already present by FITID are skipped; rows with no FITID always
-// insert (fitid NULL) and are intentionally re-importable.
-func (s *Service) CommitOFX(ctx context.Context, accountID int64, content string) (Result, error) {
+// insert (fitid NULL) and are intentionally re-importable. cats carries the
+// owner's per-row category choice (keyed by ParsedRow.Line).
+func (s *Service) CommitOFX(ctx context.Context, accountID int64, content string, cats map[int]int64) (Result, error) {
 	acct, err := s.account(ctx, accountID)
 	if err != nil {
 		return Result{}, err
@@ -137,9 +158,17 @@ func (s *Service) CommitOFX(ctx context.Context, accountID int64, content string
 	if err != nil {
 		return Result{}, err
 	}
-	res := classifyOFX(acct, content, existing)
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	res := classifyOFX(acct, content, existing, rules)
 	if res.New == 0 {
 		return res, nil
+	}
+	kinds, err := s.categoryKinds(ctx)
+	if err != nil {
+		return Result{}, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -163,6 +192,7 @@ func (s *Service) CommitOFX(ctx context.Context, accountID int64, content string
 			OccurredOn:    r.Date,
 			Description:   r.Description,
 			Fitid:         pgtype.Text{String: r.FITID, Valid: r.FITID != ""},
+			CategoryID:    resolveCategory(r, cats, kinds),
 		}); err != nil {
 			return Result{}, fmt.Errorf("importer: insert line %d: %w", r.Line, err)
 		}
@@ -219,7 +249,7 @@ func (s *Service) existingFitids(ctx context.Context, accountID int64) (map[stri
 // (against existing account FITIDs and within the batch). A row with no FITID is
 // always "new" with a warning — NEVER content-deduped, because two legitimate
 // transactions can share the same date/description/value.
-func classifyOFX(acct store.Account, content string, existing map[string]bool) Result {
+func classifyOFX(acct store.Account, content string, existing map[string]bool, rules []Rule) Result {
 	res := Result{AccountName: acct.Name, Currency: acct.Currency}
 	seen := make(map[string]bool)
 	for _, p := range ParseOFX(content) {
@@ -231,12 +261,14 @@ func classifyOFX(acct store.Account, content string, existing map[string]bool) R
 		case p.FITID == "":
 			row.Status = "new"
 			row.Warning = "no FITID — re-importing may duplicate"
+			row.SuggestedCategoryID = SuggestCategory(p.Description, p.Type, rules)
 			res.New++
 		case existing[p.FITID] || seen[p.FITID]:
 			row.Status = "duplicate"
 			res.Duplicate++
 		default:
 			row.Status = "new"
+			row.SuggestedCategoryID = SuggestCategory(p.Description, p.Type, rules)
 			res.New++
 			seen[p.FITID] = true
 		}
@@ -247,7 +279,7 @@ func classifyOFX(acct store.Account, content string, existing map[string]bool) R
 
 // classify parses content and labels each row, deduping against existing hashes
 // and within the batch itself.
-func classify(acct store.Account, content string, existing map[string]bool) Result {
+func classify(acct store.Account, content string, existing map[string]bool, rules []Rule) Result {
 	res := Result{AccountName: acct.Name, Currency: acct.Currency}
 	seen := make(map[string]bool)
 	for _, p := range Parse(content) {
@@ -263,6 +295,7 @@ func classify(acct store.Account, content string, existing map[string]bool) Resu
 				res.Duplicate++
 			} else {
 				row.Status = "new"
+				row.SuggestedCategoryID = SuggestCategory(p.Description, p.Type, rules)
 				res.New++
 				seen[h] = true
 			}
@@ -270,6 +303,50 @@ func classify(acct store.Account, content string, existing map[string]bool) Resu
 		res.Rows = append(res.Rows, row)
 	}
 	return res
+}
+
+// rules loads the auto-categorization rules (id order ⇒ first-match-wins) for
+// suggestion during preview/commit. FR-17.
+func (s *Service) rules(ctx context.Context) ([]Rule, error) {
+	rows, err := store.New(s.pool).ListCategoryRules(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("importer: list rules: %w", err)
+	}
+	out := make([]Rule, len(rows))
+	for i, r := range rows {
+		out[i] = Rule{MatchText: r.MatchText, CategoryID: r.CategoryID, Kind: r.CategoryKind}
+	}
+	return out, nil
+}
+
+// categoryKinds returns id→kind ("income"/"expense") for every category, used to
+// validate that a chosen category matches the row's type before committing it.
+func (s *Service) categoryKinds(ctx context.Context) (map[int64]string, error) {
+	rows, err := store.New(s.pool).ListCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("importer: list categories: %w", err)
+	}
+	kinds := make(map[int64]string, len(rows))
+	for _, c := range rows {
+		kinds[c.ID] = c.Kind
+	}
+	return kinds, nil
+}
+
+// resolveCategory picks the category to write for a new row: the owner's explicit
+// choice (cats keyed by Line, present even when 0 ⇒ intentionally uncategorized),
+// else the row's suggestion. The chosen id must exist and match the row's kind,
+// else the row is imported uncategorized (defensive; the UI already prevents a
+// mismatch). Honors the category kind rule.
+func resolveCategory(r PreviewRow, cats map[int]int64, kinds map[int64]string) pgtype.Int8 {
+	id := r.SuggestedCategoryID
+	if c, ok := cats[r.Line]; ok {
+		id = c
+	}
+	if id == 0 || kinds[id] != r.Type {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
 }
 
 // rowHash is the stored per-row natural key over the dedup tuple

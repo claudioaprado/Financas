@@ -23,8 +23,8 @@ FROM transaction
 ORDER BY occurred_on DESC, id DESC;
 
 -- name: CreateImportedTransaction :execrows
-INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash, category_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
 -- name: ListAccountImportHashes :many
 SELECT import_hash
@@ -35,8 +35,8 @@ WHERE import_hash IS NOT NULL AND (from_account_id = $1 OR to_account_id = $1);
 -- OFX import (FR-16): an Income/Expense row carrying the bank's FITID (or NULL
 -- when the STMTTRN has none). category_id and import_hash default NULL — OFX
 -- dedup is FITID-only, never the tab importer's content hash.
-INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, fitid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, fitid, category_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
 -- name: ListAccountFitids :many
 SELECT fitid

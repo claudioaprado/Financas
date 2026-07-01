@@ -63,7 +63,7 @@ func TestImport(t *testing.T) {
 		t.Fatalf("preview = %d new / %d dup / %d err; want 2/0/1", prev.New, prev.Duplicate, prev.Errors)
 	}
 
-	res, err := svc.Commit(ctx, cash.ID, content)
+	res, err := svc.Commit(ctx, cash.ID, content, nil)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestImport(t *testing.T) {
 	if prev2.New != 0 || prev2.Duplicate != 2 {
 		t.Errorf("re-preview = %d new / %d dup; want 0/2", prev2.New, prev2.Duplicate)
 	}
-	res2, err := svc.Commit(ctx, cash.ID, content)
+	res2, err := svc.Commit(ctx, cash.ID, content, nil)
 	if err != nil {
 		t.Fatalf("commit 2: %v", err)
 	}

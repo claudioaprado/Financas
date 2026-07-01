@@ -1092,12 +1092,13 @@ templ SecuritiesPage(data ShellData, securities []SecurityRow, types []SecurityT
 // or OFX (Story 7.1), chosen via the format selector. On first load it shows the
 // upload form; after a preview it shows the parsed rows with new/duplicate/error
 // status (and a "no FITID" caveat on OFX rows without one) and a Commit button.
-templ ImportPage(data ShellData, acctID int64, accountName, currency, format string, content string, rows []ImportRow, newCount int, hasResult bool, errMsg string) {
+templ ImportPage(data ShellData, acctID int64, accountName, currency, format string, content string, rows []ImportRow, incomeCats, expenseCats []CategoryOption, newCount int, hasResult bool, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-accent hover:underline">← { accountName }</a></p>
 			<h1 class="mt-1 text-2xl font-bold">Importar transações</h1>
 			<p class="mt-1 text-sm text-muted">Valor negativo é despesa, positivo é receita, em { currency }. <strong>Tabulação:</strong> <code>data⇥descrição⇥valor</code> (datas <code>dd/mm/aaaa</code>, números <code>1.234,56</code>); reimportar o mesmo arquivo não duplica. <strong>OFX:</strong> extrato do banco; a deduplicação usa o identificador do banco (FITID), então reimportar não duplica — linhas sem FITID são importadas e sinalizadas.</p>
+			<p class="mt-1 text-sm"><a href="/categories/rules" class="text-accent hover:underline">Regras de categorização automática →</a></p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
@@ -1120,57 +1121,142 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency, format str
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Visualizar</button>
 			</form>
 			if hasResult {
-				<table class="mt-6 w-full text-sm">
-					<thead>
-						<tr class="text-left text-muted">
-							<th class="py-1">Linha</th>
-							<th>Data</th>
-							<th>Descrição</th>
-							<th>Tipo</th>
-							<th class="text-right">Valor</th>
-							<th>Status</th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, r := range rows {
-							<tr class="border-t border-black/5">
-								<td class="py-1">{ countLabel(int64(r.Line)) }</td>
-								if r.Status == "error" {
-									<td colspan="3" class="text-loss">{ r.Raw }</td>
-									<td></td>
-									<td class="text-loss">erro: { r.Reason }</td>
-								} else {
-									<td>{ r.Date }</td>
-									<td>{ r.Description }</td>
-									<td>{ r.Type }</td>
-									<td class={ "text-right", templ.KV("text-gain", r.Type == "income"), templ.KV("text-loss", r.Type == "expense") }>{ r.Amount }</td>
-									<td>
-										if r.Status == "duplicate" {
-											<span class="text-muted">duplicado</span>
-										} else {
-											<span class="text-gain">novo</span>
-											if r.Warning != "" {
-												<span class="text-loss" title="Reimportar esta linha pode duplicá-la"> · sem FITID</span>
-											}
-										}
-									</td>
-								}
+				<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/commit") } class="mt-6">
+					<input type="hidden" name="content" value={ content }/>
+					<input type="hidden" name="format" value={ format }/>
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="text-left text-muted">
+								<th class="py-1">Linha</th>
+								<th>Data</th>
+								<th>Descrição</th>
+								<th>Tipo</th>
+								<th class="text-right">Valor</th>
+								<th>Status</th>
+								<th>Categoria</th>
 							</tr>
-						}
-					</tbody>
-				</table>
-				if newCount > 0 {
-					<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/commit") } class="mt-4">
-						<input type="hidden" name="content" value={ content }/>
-						<input type="hidden" name="format" value={ format }/>
-						<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Confirmar { countLabel(int64(newCount)) } novas linhas</button>
-					</form>
-				} else {
-					<p class="mt-4 text-sm text-muted">Nenhuma linha nova para importar.</p>
-				}
+						</thead>
+						<tbody>
+							for _, r := range rows {
+								<tr class="border-t border-black/5">
+									<td class="py-1">{ countLabel(int64(r.Line)) }</td>
+									if r.Status == "error" {
+										<td colspan="3" class="text-loss">{ r.Raw }</td>
+										<td></td>
+										<td class="text-loss">erro: { r.Reason }</td>
+										<td></td>
+									} else {
+										<td>{ r.Date }</td>
+										<td>{ r.Description }</td>
+										<td>{ r.Type }</td>
+										<td class={ "text-right", templ.KV("text-gain", r.Type == "income"), templ.KV("text-loss", r.Type == "expense") }>{ r.Amount }</td>
+										<td>
+											if r.Status == "duplicate" {
+												<span class="text-muted">duplicado</span>
+											} else {
+												<span class="text-gain">novo</span>
+												if r.Warning != "" {
+													<span class="text-loss" title="Reimportar esta linha pode duplicá-la"> · sem FITID</span>
+												}
+											}
+										</td>
+										<td>
+											if r.Status == "new" {
+												@categorySelect(r.Line, r.Type, incomeCats, expenseCats, r.SuggestedCategoryID)
+											}
+										</td>
+									}
+								</tr>
+							}
+						</tbody>
+					</table>
+					if newCount > 0 {
+						<button class="mt-4 rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Confirmar { countLabel(int64(newCount)) } novas linhas</button>
+					} else {
+						<p class="mt-4 text-sm text-muted">Nenhuma linha nova para importar.</p>
+					}
+				</form>
 			}
 		</section>
 	}
+}
+
+// CategoryRulesPage manages auto-categorization rules (Story 7.2): an add form
+// (match text + a category) and a list with delete. Rules only SUGGEST a category
+// in the import preview — nothing is auto-committed.
+templ CategoryRulesPage(data ShellData, categories []CategoryOption, rules []RuleRow, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categorias</a></p>
+			<h1 class="mt-1 text-2xl font-bold">Regras de categorização automática</h1>
+			<p class="mt-1 text-sm text-muted">Quando a descrição de uma transação importada contém o texto da regra, a categoria é <strong>sugerida</strong> na pré-visualização da importação (você aceita ou troca antes de confirmar). Regras de receita valem só para receitas; de despesa, só para despesas.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			<form method="post" action="/categories/rules" class="mt-4 flex flex-wrap items-end gap-3">
+				<div>
+					<label class="block text-xs" for="match_text">A descrição contém</label>
+					<input id="match_text" name="match_text" type="text" required class="rounded border px-2 py-1 text-sm" placeholder="p.ex. uber"/>
+				</div>
+				<div>
+					<label class="block text-xs" for="category_id">Categoria</label>
+					<select id="category_id" name="category_id" class="rounded border px-2 py-1 text-sm">
+						for _, c := range categories {
+							<option value={ accountID(c.ID) }>{ c.Name } ({ c.Kind })</option>
+						}
+					</select>
+				</div>
+				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Adicionar regra</button>
+			</form>
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">A descrição contém</th>
+						<th>Categoria</th>
+						<th>Tipo</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(rules) == 0 {
+						<tr><td colspan="4" class="py-2 text-muted">Nenhuma regra ainda.</td></tr>
+					} else {
+						for _, r := range rules {
+							<tr class="border-t border-black/5">
+								<td class="py-1"><code>{ r.MatchText }</code></td>
+								<td>{ r.CategoryName }</td>
+								<td>{ r.Kind }</td>
+								<td class="text-right">
+									<form method="post" action="/categories/rules/delete">
+										<input type="hidden" name="id" value={ accountID(r.ID) }/>
+										<button class="text-loss hover:underline" type="submit">Remover</button>
+									</form>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// categorySelect renders the per-row category picker (name cat_{line}),
+// pre-selected to the rule suggestion; the owner accepts or overrides before
+// commit. Options are scoped to the row's kind (income/expense).
+templ categorySelect(line int, kind string, incomeCats, expenseCats []CategoryOption, selected int64) {
+	<select name={ "cat_" + accountID(int64(line)) } class="rounded border px-1 py-0.5 text-xs">
+		<option value="0">— sem categoria —</option>
+		if kind == "income" {
+			for _, c := range incomeCats {
+				<option value={ accountID(c.ID) } selected?={ c.ID == selected }>{ c.Name }</option>
+			}
+		} else {
+			for _, c := range expenseCats {
+				<option value={ accountID(c.ID) } selected?={ c.ID == selected }>{ c.Name }</option>
+			}
+		}
+	</select>
 }
 
 // TransactionsPage is the cross-account register (Story 3.5): a filter form

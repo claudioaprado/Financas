@@ -29,6 +29,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
+	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
@@ -108,6 +109,14 @@ type Categories interface {
 	Delete(ctx context.Context, id int64, force bool) error
 }
 
+// CategoryRules manages auto-categorization rules (Story 7.2 / FR-17). Defined
+// here (consumer side) and implemented by service/categoryrule.
+type CategoryRules interface {
+	List(ctx context.Context) ([]categoryrule.Rule, error)
+	Add(ctx context.Context, matchText string, categoryID int64) (categoryrule.Rule, error)
+	Delete(ctx context.Context, id int64) error
+}
+
 // Securities creates and lists the owner's securities. Defined here (consumer
 // side) and implemented by service/security.
 type Securities interface {
@@ -119,9 +128,9 @@ type Securities interface {
 // (Story 7.1). Defined here (consumer side) and implemented by service/importer.
 type Imports interface {
 	Preview(ctx context.Context, accountID int64, content string) (importer.Result, error)
-	Commit(ctx context.Context, accountID int64, content string) (importer.Result, error)
+	Commit(ctx context.Context, accountID int64, content string, cats map[int]int64) (importer.Result, error)
 	PreviewOFX(ctx context.Context, accountID int64, content string) (importer.Result, error)
-	CommitOFX(ctx context.Context, accountID int64, content string) (importer.Result, error)
+	CommitOFX(ctx context.Context, accountID int64, content string, cats map[int]int64) (importer.Result, error)
 }
 
 // Valuation derives the cross-account portfolio & Net Worth in the Display
@@ -154,6 +163,7 @@ type Deps struct {
 	Accounts      Accounts
 	Transactions  Transactions
 	Categories    Categories
+	CategoryRules CategoryRules
 	Securities    Securities
 	Imports       Imports
 	Valuation     Valuation
@@ -225,6 +235,9 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories", categoriesPage(deps))
 		pr.Post("/categories", categoriesCreate(deps))
 		pr.Post("/categories/delete", categoriesDelete(deps))
+		pr.Get("/categories/rules", rulesPage(deps))
+		pr.Post("/categories/rules", rulesCreate(deps))
+		pr.Post("/categories/rules/delete", rulesDelete(deps))
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
@@ -320,6 +333,13 @@ func knownErrMsg(err error) (string, bool) {
 		return "Esta categoria está em uso por transações.", true
 	case errors.Is(err, category.ErrNotFound):
 		return "Categoria não encontrada.", true
+	// categoryrule
+	case errors.Is(err, categoryrule.ErrEmptyMatch):
+		return "O texto da regra não pode ficar vazio.", true
+	case errors.Is(err, categoryrule.ErrCategoryNotFound):
+		return "Categoria não encontrada.", true
+	case errors.Is(err, categoryrule.ErrNotFound):
+		return "Regra não encontrada.", true
 	// security
 	case errors.Is(err, security.ErrEmptySymbol):
 		return "O código do ativo não pode ficar vazio.", true
@@ -848,6 +868,26 @@ func importFormat(v string) string {
 	return "tab"
 }
 
+// parseImportCategories reads the per-row category selects (cat_{line}=id) the
+// owner accepted/overrode in the preview into a Line→categoryID map. A present
+// value of 0 (the blank option) means "intentionally uncategorized"; an absent
+// key lets the service fall back to the rule suggestion (FR-17).
+func parseImportCategories(req *http.Request) map[int]int64 {
+	cats := map[int]int64{}
+	for key, vals := range req.PostForm {
+		if !strings.HasPrefix(key, "cat_") || len(vals) == 0 {
+			continue
+		}
+		line, err := strconv.Atoi(strings.TrimPrefix(key, "cat_"))
+		if err != nil {
+			continue
+		}
+		id, _ := strconv.ParseInt(vals[0], 10, 64) // "" / "0" ⇒ 0 (uncategorized)
+		cats[line] = id
+	}
+	return cats
+}
+
 func importCommit(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		acctID, ok := parsePathID(req)
@@ -861,12 +901,13 @@ func importCommit(deps Deps) http.HandlerFunc {
 		}
 		content := req.PostFormValue("content")
 		format := importFormat(req.PostFormValue("format"))
+		cats := parseImportCategories(req)
 		var res importer.Result
 		var err error
 		if format == "ofx" {
-			res, err = deps.Imports.CommitOFX(req.Context(), acctID, content)
+			res, err = deps.Imports.CommitOFX(req.Context(), acctID, content, cats)
 		} else {
-			res, err = deps.Imports.Commit(req.Context(), acctID, content)
+			res, err = deps.Imports.Commit(req.Context(), acctID, content, cats)
 		}
 		if err != nil {
 			renderImport(deps, w, req, acctID, format, content, nil, problemMsg(req, "Não foi possível importar. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
@@ -904,13 +945,31 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 		renderError(deps, w, req, "accounts", loadErrorMsg)
 		return
 	}
+	// Categories power the per-row suggestion selects. A load failure here is
+	// secondary — degrade to no selects rather than failing the whole import.
+	var incomeCats, expenseCats []web.CategoryOption
+	if deps.Categories != nil {
+		if cs, cerr := deps.Categories.List(req.Context()); cerr != nil {
+			logLoad(req, "import categories", cerr)
+		} else {
+			for _, c := range cs {
+				opt := web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)}
+				if c.Kind == category.Income {
+					incomeCats = append(incomeCats, opt)
+				} else {
+					expenseCats = append(expenseCats, opt)
+				}
+			}
+		}
+	}
+
 	var rows []web.ImportRow
 	newCount := 0
 	hasResult := res != nil
 	if res != nil {
 		newCount = res.New
 		for _, r := range res.Rows {
-			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Warning: r.Warning, Raw: r.Raw}
+			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Warning: r.Warning, Raw: r.Raw, SuggestedCategoryID: r.SuggestedCategoryID}
 			if r.OK {
 				ir.Date = r.Date.Format("02/01/2006")
 				ir.Type = r.Type
@@ -925,7 +984,7 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.ImportPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Currency), format, content, rows, newCount, hasResult, errMsg).Render(req.Context(), w)
+	_ = web.ImportPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Currency), format, content, rows, incomeCats, expenseCats, newCount, hasResult, errMsg).Render(req.Context(), w)
 }
 
 func transactionsRegister(deps Deps) http.HandlerFunc {
@@ -1071,6 +1130,71 @@ func renderCategories(deps Deps, w http.ResponseWriter, req *http.Request, errMs
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.CategoriesPage(shellData(deps, req.Context(), "settings"), rows, errMsg).Render(req.Context(), w)
+}
+
+func rulesPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderRules(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func rulesCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		matchText := req.PostFormValue("match_text")
+		categoryID, _ := strconv.ParseInt(req.PostFormValue("category_id"), 10, 64)
+		if _, err := deps.CategoryRules.Add(req.Context(), matchText, categoryID); err != nil {
+			renderRules(deps, w, req, problemMsg(req, "Não foi possível criar a regra. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/categories/rules", http.StatusSeeOther)
+	}
+}
+
+func rulesDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderRules(deps, w, req, "ID de regra inválido.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.CategoryRules.Delete(req.Context(), id); err != nil {
+			renderRules(deps, w, req, problemMsg(req, "Não foi possível remover a regra. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/categories/rules", http.StatusSeeOther)
+	}
+}
+
+func renderRules(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var cats []web.CategoryOption
+	if cs, err := deps.Categories.List(req.Context()); err != nil {
+		logLoad(req, "rules categories list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
+		for _, c := range cs {
+			cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
+		}
+	}
+	var rules []web.RuleRow
+	if rs, err := deps.CategoryRules.List(req.Context()); err != nil {
+		logLoad(req, "rules list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
+		for _, r := range rs {
+			rules = append(rules, web.RuleRow{ID: r.ID, MatchText: r.MatchText, CategoryName: r.CategoryName, Kind: r.Kind})
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.CategoryRulesPage(shellData(deps, req.Context(), "settings"), cats, rules, errMsg).Render(req.Context(), w)
 }
 
 func categorySummary(deps Deps) http.HandlerFunc {

@@ -19,6 +19,10 @@ type Querier interface {
 	ClearCategoryFromTransactions(ctx context.Context, categoryID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
+	// Auto-categorization rules (Story 7.2 / FR-17). A rule inherits its category's
+	// kind, so ListCategoryRules joins category to return kind + name for the matcher
+	// and the management UI, ordered by id (insertion order ⇒ first-match-wins).
+	CreateCategoryRule(ctx context.Context, arg CreateCategoryRuleParams) (CategoryRule, error)
 	CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (int64, error)
 	// OFX import (FR-16): an Income/Expense row carrying the bank's FITID (or NULL
 	// when the STMTTRN has none). category_id and import_hash default NULL — OFX
@@ -27,6 +31,7 @@ type Querier interface {
 	CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
+	DeleteCategoryRule(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
 	// Full-row export queries for Story 6.1 (authored-data backup). Each SELECT
 	// lists exactly its table's columns and ORDERs BY id, so sqlc returns the
@@ -55,6 +60,7 @@ type Querier interface {
 	ListActiveAccounts(ctx context.Context) ([]Account, error)
 	ListAllAccounts(ctx context.Context) ([]Account, error)
 	ListCategories(ctx context.Context) ([]Category, error)
+	ListCategoryRules(ctx context.Context) ([]ListCategoryRulesRow, error)
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)

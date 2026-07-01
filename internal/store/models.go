@@ -32,6 +32,13 @@ type Category struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type CategoryRule struct {
+	ID         int64
+	MatchText  string
+	CategoryID int64
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Currency struct {
 	Code string
 	Name string

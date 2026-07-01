@@ -14,8 +14,8 @@ import (
 )
 
 const createImportedTransaction = `-- name: CreateImportedTransaction :execrows
-INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash, category_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateImportedTransactionParams struct {
@@ -27,6 +27,7 @@ type CreateImportedTransactionParams struct {
 	OccurredOn    time.Time
 	Description   string
 	ImportHash    pgtype.Text
+	CategoryID    pgtype.Int8
 }
 
 func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (int64, error) {
@@ -39,6 +40,7 @@ func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImpor
 		arg.OccurredOn,
 		arg.Description,
 		arg.ImportHash,
+		arg.CategoryID,
 	)
 	if err != nil {
 		return 0, err
@@ -47,8 +49,8 @@ func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImpor
 }
 
 const createOFXTransaction = `-- name: CreateOFXTransaction :execrows
-INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, fitid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, fitid, category_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateOFXTransactionParams struct {
@@ -60,6 +62,7 @@ type CreateOFXTransactionParams struct {
 	OccurredOn    time.Time
 	Description   string
 	Fitid         pgtype.Text
+	CategoryID    pgtype.Int8
 }
 
 // OFX import (FR-16): an Income/Expense row carrying the bank's FITID (or NULL
@@ -75,6 +78,7 @@ func (q *Queries) CreateOFXTransaction(ctx context.Context, arg CreateOFXTransac
 		arg.OccurredOn,
 		arg.Description,
 		arg.Fitid,
+		arg.CategoryID,
 	)
 	if err != nil {
 		return 0, err

@@ -60,7 +60,7 @@ func TestImportOFX(t *testing.T) {
 		t.Errorf("preview surfaced %d warnings; want 1 (the no-FITID row)", warned)
 	}
 
-	if _, err := svc.CommitOFX(ctx, cash.ID, content); err != nil {
+	if _, err := svc.CommitOFX(ctx, cash.ID, content, nil); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 	// Balance = 5000 - 1234.56 - 10 = 3755.44 USD.
@@ -77,7 +77,7 @@ func TestImportOFX(t *testing.T) {
 	if prev2.New != 1 || prev2.Duplicate != 2 || prev2.Errors != 1 {
 		t.Errorf("re-preview = %d new / %d dup / %d err; want 1/2/1", prev2.New, prev2.Duplicate, prev2.Errors)
 	}
-	if _, err := svc.CommitOFX(ctx, cash.ID, content); err != nil {
+	if _, err := svc.CommitOFX(ctx, cash.ID, content, nil); err != nil {
 		t.Fatalf("commit 2: %v", err)
 	}
 	// The no-FITID row re-imported: balance drops another 10 → 3745.44.
@@ -102,7 +102,7 @@ func TestImportOFX(t *testing.T) {
 	if gprev.New != 2 || gprev.Duplicate != 0 {
 		t.Fatalf("guard preview = %d new / %d dup; want 2/0 (different FITID ⇒ not duplicates)", gprev.New, gprev.Duplicate)
 	}
-	if _, err := svc.CommitOFX(ctx, guard.ID, twins); err != nil {
+	if _, err := svc.CommitOFX(ctx, guard.ID, twins, nil); err != nil {
 		t.Fatalf("guard commit: %v", err)
 	}
 	if bal, _ := txns.Balance(ctx, guard.ID); !bal.Amount().Equal(decimal.RequireFromString("-84")) {

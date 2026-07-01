@@ -241,6 +241,14 @@ two legitimate identical transactions are both kept. A `STMTTRN` without a FITID
 imported as new and flagged (re-importing it may duplicate). Malformed records are
 reported per-row without aborting the batch; the commit writes in one transaction.
 
+**Auto-categorization rules** (managed at `/categories/rules`) are global "description
+contains X → Category Y" rules. During an import preview each matched row shows the
+**suggested Category** pre-selected in a per-row picker you can accept or override
+before committing — nothing is auto-committed silently. A rule inherits its category's
+kind, so income rules are only suggested on income rows (and expense on expense); a row
+matching multiple rules uses the first (by insertion order), and unmatched rows stay
+uncategorized.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

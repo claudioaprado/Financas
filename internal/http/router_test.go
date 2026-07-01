@@ -21,6 +21,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
+	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
@@ -476,16 +477,18 @@ func (s *stubCategories) Delete(_ context.Context, id int64, force bool) error {
 // importer.Parse / importer.ParseOFX and records committed content per format;
 // every OK row counts as "new" (OFX rows without a FITID also carry a warning).
 type stubImports struct {
-	committed    []string
-	committedOFX []string
+	committed     []string
+	committedOFX  []string
+	committedCats map[int]int64 // last cats map received by a Commit/CommitOFX
 }
 
 func (s *stubImports) Preview(_ context.Context, _ int64, content string) (importer.Result, error) {
 	return stubImportResult(content), nil
 }
 
-func (s *stubImports) Commit(_ context.Context, _ int64, content string) (importer.Result, error) {
+func (s *stubImports) Commit(_ context.Context, _ int64, content string, cats map[int]int64) (importer.Result, error) {
 	s.committed = append(s.committed, content)
+	s.committedCats = cats
 	return stubImportResult(content), nil
 }
 
@@ -493,9 +496,44 @@ func (s *stubImports) PreviewOFX(_ context.Context, _ int64, content string) (im
 	return stubImportResultOFX(content), nil
 }
 
-func (s *stubImports) CommitOFX(_ context.Context, _ int64, content string) (importer.Result, error) {
+func (s *stubImports) CommitOFX(_ context.Context, _ int64, content string, cats map[int]int64) (importer.Result, error) {
 	s.committedOFX = append(s.committedOFX, content)
+	s.committedCats = cats
 	return stubImportResultOFX(content), nil
+}
+
+// stubCategoryRules is an in-memory CategoryRules for handler tests.
+type stubCategoryRules struct {
+	rules   []categoryrule.Rule
+	nextID  int64
+	listErr error
+}
+
+func (s *stubCategoryRules) List(_ context.Context) ([]categoryrule.Rule, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.rules, nil
+}
+
+func (s *stubCategoryRules) Add(_ context.Context, matchText string, categoryID int64) (categoryrule.Rule, error) {
+	if strings.TrimSpace(matchText) == "" {
+		return categoryrule.Rule{}, categoryrule.ErrEmptyMatch
+	}
+	s.nextID++
+	r := categoryrule.Rule{ID: s.nextID, MatchText: matchText, CategoryID: categoryID, Kind: "expense"}
+	s.rules = append(s.rules, r)
+	return r, nil
+}
+
+func (s *stubCategoryRules) Delete(_ context.Context, id int64) error {
+	for i := range s.rules {
+		if s.rules[i].ID == id {
+			s.rules = append(s.rules[:i], s.rules[i+1:]...)
+			return nil
+		}
+	}
+	return categoryrule.ErrNotFound
 }
 
 func stubImportResult(content string) importer.Result {
@@ -783,6 +821,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Accounts:      &stubAccounts{},
 		Transactions:  &stubTransactions{},
 		Categories:    &stubCategories{usage: map[int64]int64{}},
+		CategoryRules: &stubCategoryRules{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
@@ -1842,6 +1881,7 @@ func TestHoldingValuationColumns(t *testing.T) {
 		Accounts:      &stubAccounts{},
 		Transactions:  txs,
 		Categories:    &stubCategories{usage: map[int64]int64{}},
+		CategoryRules: &stubCategoryRules{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
@@ -2065,6 +2105,103 @@ func TestImportOFXFormat(t *testing.T) {
 	}
 	if len(imp.committed) != 0 {
 		t.Errorf("OFX commit must not touch the tab path; got %v", imp.committed)
+	}
+}
+
+// TestCategoryRulesPage covers the guarded rules management page (Story 7.2):
+// auth gate, add renders the rule, delete removes it.
+func TestCategoryRulesPage(t *testing.T) {
+	deps := testDeps(true, nil)
+	cats := &stubCategories{usage: map[int64]int64{}}
+	_, _ = cats.Create(context.Background(), "Food", category.Expense)
+	deps.Categories = cats
+	rules := &stubCategoryRules{}
+	deps.CategoryRules = rules
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/categories/rules", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth rules = %d, want 303", recUnauth.Code)
+	}
+
+	// Page renders with the category option.
+	recForm := httptest.NewRecorder()
+	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/categories/rules", nil), cookie))
+	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Regras de categorização automática") {
+		t.Fatalf("rules page = %d, missing heading", recForm.Code)
+	}
+
+	// Add a rule.
+	recAdd := httptest.NewRecorder()
+	add := httptest.NewRequest(http.MethodPost, "/categories/rules", strings.NewReader("match_text=uber&category_id=1"))
+	add.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAdd, withCookie(add, cookie))
+	if recAdd.Code != http.StatusSeeOther || len(rules.rules) != 1 || rules.rules[0].MatchText != "uber" {
+		t.Fatalf("add rule = %d, rules = %+v", recAdd.Code, rules.rules)
+	}
+
+	// Delete it.
+	recDel := httptest.NewRecorder()
+	del := httptest.NewRequest(http.MethodPost, "/categories/rules/delete", strings.NewReader("id=1"))
+	del.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recDel, withCookie(del, cookie))
+	if recDel.Code != http.StatusSeeOther || len(rules.rules) != 0 {
+		t.Fatalf("delete rule = %d, rules = %+v", recDel.Code, rules.rules)
+	}
+}
+
+// TestImportCategorySelect verifies the preview renders a per-row category select
+// and that committing forwards the chosen category to the service (Story 7.2).
+func TestImportCategorySelect(t *testing.T) {
+	deps := testDeps(true, nil)
+	cats := &stubCategories{usage: map[int64]int64{}}
+	_, _ = cats.Create(context.Background(), "Food", category.Expense)
+	deps.Categories = cats
+	imp := &stubImports{}
+	deps.Imports = imp
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	recAcc := httptest.NewRecorder()
+	mk := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Imp&type=cash&currency=USD"))
+	mk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAcc, withCookie(mk, cookie))
+
+	content := "01/03/2024\tGrocery\t-10,00\n" // one new expense row → Line 1
+	body := url.Values{"content": {content}}.Encode()
+
+	// Preview renders a category select for the new row, with the expense option.
+	recPrev := httptest.NewRecorder()
+	prev := httptest.NewRequest(http.MethodPost, "/accounts/1/import/preview", strings.NewReader(body))
+	prev.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recPrev, withCookie(prev, cookie))
+	pb := recPrev.Body.String()
+	for _, want := range []string{`name="cat_1"`, "Food", "— sem categoria —"} {
+		if !strings.Contains(pb, want) {
+			t.Errorf("preview missing %q", want)
+		}
+	}
+
+	// Commit forwards the chosen category (cat_1=1) to the service.
+	commitBody := url.Values{"content": {content}, "cat_1": {"1"}}.Encode()
+	recCommit := httptest.NewRecorder()
+	commit := httptest.NewRequest(http.MethodPost, "/accounts/1/import/commit", strings.NewReader(commitBody))
+	commit.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recCommit, withCookie(commit, cookie))
+	if recCommit.Code != http.StatusSeeOther {
+		t.Fatalf("commit = %d, want 303", recCommit.Code)
+	}
+	if imp.committedCats[1] != 1 {
+		t.Errorf("commit forwarded cats = %+v; want {1:1}", imp.committedCats)
 	}
 }
 

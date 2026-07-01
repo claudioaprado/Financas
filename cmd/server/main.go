@@ -22,6 +22,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/auth"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/category"
+	"github.com/claudioaprado/financas/internal/service/categoryrule"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
@@ -81,6 +82,7 @@ func main() {
 			Accounts:      account.New(pool),
 			Transactions:  transaction.New(pool),
 			Categories:    category.New(pool),
+			CategoryRules: categoryrule.New(pool),
 			Securities:    security.New(pool),
 			Imports:       importer.New(pool),
 			Valuation:     valuation.New(pool),

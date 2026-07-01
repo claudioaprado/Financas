@@ -378,6 +378,16 @@ type ImportRow struct {
 	Reason      string
 	Warning     string // non-empty when the row imports with a caveat (OFX row w/o FITID)
 	Raw         string
+
+	SuggestedCategoryID int64 // auto-categorization suggestion for a new row (0 = none), FR-17
+}
+
+// RuleRow is one auto-categorization rule for the management page (Story 7.2).
+type RuleRow struct {
+	ID           int64
+	MatchText    string
+	CategoryName string
+	Kind         string // "income" | "expense"
 }
 
 // SecurityTypeOption is one security-type choice in the create form (value is
