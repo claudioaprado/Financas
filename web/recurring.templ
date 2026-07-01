@@ -1,0 +1,216 @@
+package web
+
+// RecurringPage is the recurring-transactions home (Epic 9 / FR-20): a "due now"
+// section the owner posts or skips with one click (Story 9.2), the create/edit
+// form (Story 9.1), and the list of all templates. Everything derives on read —
+// "due" is computed from the schedule, posting materializes a real ledger row.
+// It works without JS (plain forms); the type-specific account fields are all
+// shown and the server interprets them by the selected type.
+templ RecurringPage(data ShellData, form RecurringForm, accounts []FilterOption, categories []CategoryOption, due []RecurringRow, templates []RecurringRow, errMsg string) {
+	@Shell(data) {
+		<section class="max-w-4xl rounded-card bg-white p-6 shadow-card">
+			<h1 class="text-2xl font-bold">Transações recorrentes</h1>
+			<p class="mt-1 text-sm text-muted">Cadastre receitas, despesas e transferências que se repetem. Nada é lançado automaticamente: quando uma ocorrência vence, você a lança com um clique — o que cria uma transação real e avança a agenda.</p>
+			if errMsg != "" {
+				<p class="mt-3 text-loss">{ errMsg }</p>
+			}
+			if len(due) > 0 {
+				<div class="mt-5 rounded-card border border-amber-300 bg-amber-50 p-4">
+					<h2 class="text-lg font-semibold text-amber-900">A vencer</h2>
+					<table class="mt-2 w-full text-sm">
+						<tbody>
+							for _, r := range due {
+								<tr class="border-t border-amber-200/70">
+									<td class="py-2">
+										<span class="font-medium">{ r.NextDue }</span>
+										<span class="text-muted"> · { r.TypeLabel } · { r.Account }</span>
+										if r.Description != "" {
+											<span class="text-muted"> — { r.Description }</span>
+										}
+									</td>
+									<td class="py-2 text-right tabular-nums font-medium">{ r.Amount }</td>
+									<td class="py-2 text-right">
+										<form method="post" action="/recurring/post" class="inline">
+											<input type="hidden" name="id" value={ accountID(r.ID) }/>
+											<input type="hidden" name="occurrence" value={ r.NextDueValue }/>
+											<button class="rounded bg-slate-900 px-3 py-1 text-white" type="submit">Lançar</button>
+										</form>
+										<form method="post" action="/recurring/skip" class="inline">
+											<input type="hidden" name="id" value={ accountID(r.ID) }/>
+											<input type="hidden" name="occurrence" value={ r.NextDueValue }/>
+											<button class="ml-1 rounded border px-3 py-1 text-muted hover:text-ink" type="submit">Pular</button>
+										</form>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+			@recurringForm(form, accounts, categories)
+			<h2 class="mt-8 text-lg font-semibold">Todos os recorrentes</h2>
+			<table class="mt-2 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Tipo</th>
+						<th>Conta</th>
+						<th>Categoria</th>
+						<th class="text-right">Valor</th>
+						<th>Cadência</th>
+						<th>Próximo</th>
+						<th>Fim</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(templates) == 0 {
+						<tr><td colspan="8" class="py-2 text-muted">Nenhum recorrente ainda.</td></tr>
+					} else {
+						for _, r := range templates {
+							<tr class="border-t border-black/5">
+								<td class="py-1">{ r.TypeLabel }</td>
+								<td>{ r.Account }</td>
+								<td>{ r.Category }</td>
+								<td class="text-right tabular-nums">
+									{ r.Amount }
+									if r.CrossCurrency {
+										<span class="text-muted"> → { r.ToAmount }</span>
+									}
+								</td>
+								<td>{ r.Cadence }</td>
+								<td class="tabular-nums">
+									{ r.NextDue }
+									if r.Due {
+										<span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">vencido</span>
+									}
+								</td>
+								<td class="tabular-nums">{ r.EndDate }</td>
+								<td class="text-right whitespace-nowrap">
+									<a href={ templ.URL("/recurring?edit=" + accountID(r.ID)) } class="text-accent hover:underline">Editar</a>
+									<form method="post" action="/recurring/delete" class="inline">
+										<input type="hidden" name="id" value={ accountID(r.ID) }/>
+										<button class="ml-2 text-loss hover:underline" type="submit">Remover</button>
+									</form>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+// recurringForm is the create/edit template form. When form.ID is non-zero it
+// edits (posting to /recurring/edit with the hidden id); otherwise it creates.
+// All account fields are shown; the server reads the ones relevant to the chosen
+// type (a single account for income/expense, source+destination for transfer).
+templ recurringForm(form RecurringForm, accounts []FilterOption, categories []CategoryOption) {
+	<h2 class="mt-8 text-lg font-semibold">
+		if form.ID != 0 {
+			Editar recorrente
+		} else {
+			Novo recorrente
+		}
+	</h2>
+	<form
+		method="post"
+		if form.ID != 0 {
+			action="/recurring/edit"
+		} else {
+			action="/recurring"
+		}
+		class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+	>
+		if form.ID != 0 {
+			<input type="hidden" name="id" value={ accountID(form.ID) }/>
+		}
+		<div>
+			<label class="block text-xs" for="type">Tipo</label>
+			<select id="type" name="type" class="w-full rounded border px-2 py-1 text-sm">
+				<option value="expense" selected?={ form.Type == "expense" }>Despesa</option>
+				<option value="income" selected?={ form.Type == "income" }>Receita</option>
+				<option value="transfer" selected?={ form.Type == "transfer" }>Transferência</option>
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs" for="account_id">Conta (receita/despesa)</label>
+			<select id="account_id" name="account_id" class="w-full rounded border px-2 py-1 text-sm">
+				<option value="0">—</option>
+				for _, a := range accounts {
+					<option value={ accountID(a.ID) } selected?={ a.ID == form.AccountID }>{ a.Label }</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs" for="category_id">Categoria (receita/despesa)</label>
+			<select id="category_id" name="category_id" class="w-full rounded border px-2 py-1 text-sm">
+				<option value="0" selected?={ form.CategoryID == 0 }>— sem categoria —</option>
+				for _, c := range categories {
+					<option value={ accountID(c.ID) } selected?={ c.ID == form.CategoryID }>{ c.Name } ({ c.Kind })</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs" for="from_account_id">De (transferência)</label>
+			<select id="from_account_id" name="from_account_id" class="w-full rounded border px-2 py-1 text-sm">
+				<option value="0">—</option>
+				for _, a := range accounts {
+					<option value={ accountID(a.ID) } selected?={ a.ID == form.FromAccountID }>{ a.Label }</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs" for="to_account_id">Para (transferência)</label>
+			<select id="to_account_id" name="to_account_id" class="w-full rounded border px-2 py-1 text-sm">
+				<option value="0">—</option>
+				for _, a := range accounts {
+					<option value={ accountID(a.ID) } selected?={ a.ID == form.ToAccountID }>{ a.Label }</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-xs" for="amount">Valor</label>
+			<input id="amount" name="amount" type="text" inputmode="decimal" required value={ form.Amount } class="w-full rounded border px-2 py-1 text-sm" placeholder="p.ex. 500,00"/>
+		</div>
+		<div>
+			<label class="block text-xs" for="to_amount">Valor no destino (transferência entre moedas)</label>
+			<input id="to_amount" name="to_amount" type="text" inputmode="decimal" value={ form.ToAmount } class="w-full rounded border px-2 py-1 text-sm" placeholder="opcional"/>
+		</div>
+		<div>
+			<label class="block text-xs" for="interval_n">Repetir a cada</label>
+			<div class="flex gap-2">
+				<input id="interval_n" name="interval_n" type="number" min="1" required value={ itoa(form.IntervalN) } class="w-20 rounded border px-2 py-1 text-sm"/>
+				<select name="cadence" class="rounded border px-2 py-1 text-sm">
+					<option value="weeks" selected?={ form.Cadence == "weeks" }>semana(s)</option>
+					<option value="months" selected?={ form.Cadence == "months" }>mês(es)</option>
+					<option value="years" selected?={ form.Cadence == "years" }>ano(s)</option>
+				</select>
+			</div>
+		</div>
+		<div>
+			<label class="block text-xs" for="start_date">Início</label>
+			<input id="start_date" name="start_date" type="date" required value={ form.StartDate } class="w-full rounded border px-2 py-1 text-sm"/>
+		</div>
+		<div>
+			<label class="block text-xs" for="end_date">Fim (opcional)</label>
+			<input id="end_date" name="end_date" type="date" value={ form.EndDate } class="w-full rounded border px-2 py-1 text-sm"/>
+		</div>
+		<div class="sm:col-span-2 lg:col-span-2">
+			<label class="block text-xs" for="description">Descrição</label>
+			<input id="description" name="description" type="text" value={ form.Description } class="w-full rounded border px-2 py-1 text-sm"/>
+		</div>
+		<div class="flex items-end gap-2">
+			<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">
+				if form.ID != 0 {
+					Salvar
+				} else {
+					Adicionar
+				}
+			</button>
+			if form.ID != 0 {
+				<a href="/recurring" class="rounded border px-3 py-1.5 text-sm text-muted hover:text-ink">Cancelar</a>
+			}
+		</div>
+	</form>
+}

@@ -14,6 +14,18 @@ templ DashboardPage(data ShellData, view DashboardView) {
 				<p class="rounded border border-loss/40 bg-loss/5 p-3 text-loss">{ view.ErrMsg }</p>
 			}
 		} else {
+			if view.DueCount > 0 {
+				<a href="/recurring" class="mt-4 flex items-center justify-between rounded-card border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 hover:bg-amber-100">
+					<span>
+						if view.DueCount == 1 {
+							Você tem <span class="font-semibold">1</span> transação recorrente a vencer.
+						} else {
+							Você tem <span class="font-semibold">{ itoa(view.DueCount) }</span> transações recorrentes a vencer.
+						}
+					</span>
+					<span class="font-medium underline">Revisar</span>
+				</a>
+			}
 			<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 				for _, c := range view.Cards {
 					@kpiCard(c)

@@ -28,6 +28,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
+	"github.com/claudioaprado/financas/internal/service/recurring"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/settings"
 	"github.com/claudioaprado/financas/internal/service/transaction"
@@ -87,6 +88,7 @@ func main() {
 			CategoryRules: categoryrule.New(pool),
 			Budgets:       budget.New(pool),
 			Analytics:     analytics.New(pool),
+			Recurring:     recurring.New(pool),
 			Securities:    security.New(pool),
 			Imports:       importer.New(pool),
 			Valuation:     valuation.New(pool),

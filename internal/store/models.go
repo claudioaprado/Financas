@@ -68,6 +68,23 @@ type Price struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Recurring struct {
+	ID            int64
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	Amount        decimal.Decimal
+	ToAmount      decimal.Decimal
+	CategoryID    pgtype.Int8
+	Cadence       string
+	IntervalN     int32
+	StartDate     time.Time
+	EndDate       pgtype.Date
+	NextDue       time.Time
+	Description   string
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Security struct {
 	ID            int64
 	Symbol        string

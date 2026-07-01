@@ -227,6 +227,7 @@ type DashboardView struct {
 	MissingCodes    string
 	UnpricedSymbols string
 	OversoldSymbols string // joined symbols of inconsistent (oversold) positions, excluded from totals; empty when none
+	DueCount        int    // recurring templates due to post (Story 9.2 nudge); 0 hides the nudge
 	ErrMsg          string
 }
 
@@ -505,6 +506,48 @@ type RegisterRow struct {
 	IsTransfer  bool
 }
 
+// RecurringRow is one recurring template formatted for display (Epic 9). Amount/
+// ToAmount are pre-formatted with their currency; Account is the affected account
+// (income/expense) or "De → Para" (transfer). Cadence is the human phrase; dates
+// are pre-formatted; Due drives the highlight + post/skip controls. NextDueValue
+// is the raw YYYY-MM-DD occurrence carried by the post/skip forms for idempotency.
+type RecurringRow struct {
+	ID           int64
+	Type         string // "income" | "expense" | "transfer"
+	TypeLabel    string
+	Account      string
+	Category     string
+	Amount       string
+	ToAmount     string
+	CrossCurrency bool
+	Cadence      string
+	StartDate    string
+	EndDate      string // "—" when open-ended
+	NextDue      string
+	NextDueValue string // YYYY-MM-DD, posted back on post/skip
+	Description  string
+	Due          bool
+}
+
+// RecurringForm is the create/edit form's field state (Epic 9). Empty ID ⇒ create;
+// a non-zero ID pre-fills the form for an edit. Amount/ToAmount are decimal input
+// strings; dates are YYYY-MM-DD input values.
+type RecurringForm struct {
+	ID            int64
+	Type          string
+	AccountID     int64
+	FromAccountID int64
+	ToAccountID   int64
+	Amount        string
+	ToAmount      string
+	CategoryID    int64
+	Cadence       string
+	IntervalN     int
+	StartDate     string
+	EndDate       string
+	Description   string
+}
+
 // NavItem is one top-navigation entry.
 type NavItem struct {
 	Label string
@@ -519,5 +562,6 @@ var NavItems = []NavItem{
 	{Label: "Investimentos", Href: "/investments", Key: "investments"},
 	{Label: "Transações", Href: "/transactions", Key: "transactions"},
 	{Label: "Contas", Href: "/accounts", Key: "accounts"},
+	{Label: "Recorrentes", Href: "/recurring", Key: "recurring"},
 	{Label: "Análises", Href: "/analytics", Key: "analytics"},
 }

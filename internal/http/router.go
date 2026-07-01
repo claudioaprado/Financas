@@ -35,6 +35,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
+	"github.com/claudioaprado/financas/internal/service/recurring"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/service/valuation"
@@ -133,6 +134,19 @@ type Analytics interface {
 	Report(ctx context.Context, months int) (domain.Analytics, error)
 }
 
+// Recurring manages recurring transaction templates and posts due occurrences
+// (Epic 9 / FR-20). Defined here (consumer side) and implemented by
+// service/recurring.
+type Recurring interface {
+	Create(ctx context.Context, in recurring.Input) (int64, error)
+	Edit(ctx context.Context, id int64, in recurring.Input) error
+	Delete(ctx context.Context, id int64) error
+	List(ctx context.Context) ([]recurring.Recurring, error)
+	Due(ctx context.Context) ([]recurring.Recurring, error)
+	Post(ctx context.Context, id int64, occurrence time.Time) error
+	Skip(ctx context.Context, id int64, occurrence time.Time) error
+}
+
 // Securities creates and lists the owner's securities. Defined here (consumer
 // side) and implemented by service/security.
 type Securities interface {
@@ -182,6 +196,7 @@ type Deps struct {
 	CategoryRules CategoryRules
 	Budgets       Budgets
 	Analytics     Analytics
+	Recurring     Recurring
 	Securities    Securities
 	Imports       Imports
 	Valuation     Valuation
@@ -259,6 +274,12 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/budgets", budgetsPage(deps))
 		pr.Post("/budgets", budgetsSet(deps))
 		pr.Post("/budgets/delete", budgetsDelete(deps))
+		pr.Get("/recurring", recurringPage(deps))
+		pr.Post("/recurring", recurringCreate(deps))
+		pr.Post("/recurring/edit", recurringEdit(deps))
+		pr.Post("/recurring/delete", recurringDelete(deps))
+		pr.Post("/recurring/post", recurringPost(deps))
+		pr.Post("/recurring/skip", recurringSkip(deps))
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
@@ -368,6 +389,39 @@ func knownErrMsg(err error) (string, bool) {
 		return "Categoria não encontrada.", true
 	case errors.Is(err, budget.ErrNotFound):
 		return "Orçamento não encontrado.", true
+	// recurring
+	case errors.Is(err, recurring.ErrInvalidType):
+		return "Tipo inválido (receita, despesa ou transferência).", true
+	case errors.Is(err, recurring.ErrNonPositiveAmount):
+		return "O valor deve ser maior que zero.", true
+	case errors.Is(err, recurring.ErrInvalidCadence):
+		return "A cadência deve ser semanas, meses ou anos.", true
+	case errors.Is(err, recurring.ErrNonPositiveInterval):
+		return "O intervalo deve ser um número inteiro positivo.", true
+	case errors.Is(err, recurring.ErrMissingStartDate):
+		return "Informe a data de início.", true
+	case errors.Is(err, recurring.ErrInvalidDateRange):
+		return "A data de fim não pode ser anterior ao início.", true
+	case errors.Is(err, recurring.ErrAccountNotFound):
+		return "Conta não encontrada.", true
+	case errors.Is(err, recurring.ErrUnsupportedAccountType):
+		return "Receitas e despesas exigem uma conta de caixa ou crédito.", true
+	case errors.Is(err, recurring.ErrSameAccount):
+		return "A origem e o destino da transferência devem ser diferentes.", true
+	case errors.Is(err, recurring.ErrToAmountRequired):
+		return "Transferência entre moedas precisa do valor de destino.", true
+	case errors.Is(err, recurring.ErrSameCurrencyAmountMismatch):
+		return "Transferência na mesma moeda deve ter valores iguais.", true
+	case errors.Is(err, recurring.ErrCategoryNotFound):
+		return "Categoria não encontrada.", true
+	case errors.Is(err, recurring.ErrCategoryKindMismatch):
+		return "O tipo da categoria deve combinar com o tipo da transação.", true
+	case errors.Is(err, recurring.ErrCategoryOnTransfer):
+		return "Transferências não recebem categoria.", true
+	case errors.Is(err, recurring.ErrNotFound):
+		return "Recorrente não encontrado.", true
+	case errors.Is(err, recurring.ErrNotDue):
+		return "Esta ocorrência já foi tratada.", true
 	// security
 	case errors.Is(err, security.ErrEmptySymbol):
 		return "O código do ativo não pode ficar vazio.", true
@@ -1348,6 +1402,328 @@ func renderBudgets(deps Deps, w http.ResponseWriter, req *http.Request, errMsg s
 	_ = web.BudgetsPage(shellData(deps, req.Context(), "settings"), monthValue, string(cur), cats, rows, notice, errMsg).Render(req.Context(), w)
 }
 
+func recurringPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		form := defaultRecurringForm()
+		// ?edit=ID pre-fills the form for that template (secondary: a bad/missing id
+		// just falls back to the create form).
+		if v := req.URL.Query().Get("edit"); v != "" {
+			if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+				if list, lErr := deps.Recurring.List(req.Context()); lErr == nil {
+					for _, r := range list {
+						if r.ID == id {
+							form = toRecurringForm(r)
+							break
+						}
+					}
+				} else {
+					logLoad(req, "recurring edit lookup", lErr)
+				}
+			}
+		}
+		renderRecurring(deps, w, req, form, "", http.StatusOK)
+	}
+}
+
+func recurringCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		in, ok := parseRecurringForm(req)
+		if !ok {
+			renderRecurring(deps, w, req, formFromRequest(req, 0), "Informe valores e datas válidos.", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.Recurring.Create(req.Context(), in); err != nil {
+			renderRecurring(deps, w, req, formFromRequest(req, 0), problemMsg(req, "Não foi possível salvar o recorrente. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/recurring", http.StatusSeeOther)
+	}
+}
+
+func recurringEdit(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderRecurring(deps, w, req, defaultRecurringForm(), "ID de recorrente inválido.", http.StatusBadRequest)
+			return
+		}
+		in, ok := parseRecurringForm(req)
+		if !ok {
+			renderRecurring(deps, w, req, formFromRequest(req, id), "Informe valores e datas válidos.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Recurring.Edit(req.Context(), id, in); err != nil {
+			renderRecurring(deps, w, req, formFromRequest(req, id), problemMsg(req, "Não foi possível salvar o recorrente. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/recurring", http.StatusSeeOther)
+	}
+}
+
+func recurringDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderRecurring(deps, w, req, defaultRecurringForm(), "ID de recorrente inválido.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Recurring.Delete(req.Context(), id); err != nil {
+			renderRecurring(deps, w, req, defaultRecurringForm(), problemMsg(req, "Não foi possível remover o recorrente. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/recurring", http.StatusSeeOther)
+	}
+}
+
+func recurringPost(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id, occ, ok := parseRecurringAction(req)
+		if !ok {
+			renderRecurring(deps, w, req, defaultRecurringForm(), "Ocorrência inválida.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Recurring.Post(req.Context(), id, occ); err != nil {
+			renderRecurring(deps, w, req, defaultRecurringForm(), problemMsg(req, "Não foi possível lançar esta ocorrência. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/recurring", http.StatusSeeOther)
+	}
+}
+
+func recurringSkip(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id, occ, ok := parseRecurringAction(req)
+		if !ok {
+			renderRecurring(deps, w, req, defaultRecurringForm(), "Ocorrência inválida.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.Recurring.Skip(req.Context(), id, occ); err != nil {
+			renderRecurring(deps, w, req, defaultRecurringForm(), problemMsg(req, "Não foi possível pular esta ocorrência. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/recurring", http.StatusSeeOther)
+	}
+}
+
+// defaultRecurringForm is the empty create form's sensible defaults: an expense,
+// monthly, every 1, starting today.
+func defaultRecurringForm() web.RecurringForm {
+	return web.RecurringForm{Type: "expense", Cadence: "months", IntervalN: 1, StartDate: time.Now().Format("2006-01-02")}
+}
+
+// parseRecurringForm reads the create/edit form into a service Input. It returns
+// ok=false only for a structurally invalid form (bad amount/interval/dates); the
+// service is the authority for semantic validation.
+func parseRecurringForm(req *http.Request) (recurring.Input, bool) {
+	if err := req.ParseForm(); err != nil {
+		return recurring.Input{}, false
+	}
+	amount, aErr := money.ParseDecimal(req.PostFormValue("amount"))
+	interval, iErr := strconv.Atoi(req.PostFormValue("interval_n"))
+	start, sErr := time.Parse("2006-01-02", req.PostFormValue("start_date"))
+	if aErr != nil || iErr != nil || sErr != nil {
+		return recurring.Input{}, false
+	}
+	in := recurring.Input{
+		Type:          req.PostFormValue("type"),
+		AccountID:     parseID(req.PostFormValue("account_id")),
+		FromAccountID: parseID(req.PostFormValue("from_account_id")),
+		ToAccountID:   parseID(req.PostFormValue("to_account_id")),
+		Amount:        amount,
+		CategoryID:    parseID(req.PostFormValue("category_id")),
+		Cadence:       req.PostFormValue("cadence"),
+		IntervalN:     interval,
+		StartDate:     start,
+		Description:   req.PostFormValue("description"),
+	}
+	// to_amount is only meaningful for a cross-currency transfer (optional).
+	if v := strings.TrimSpace(req.PostFormValue("to_amount")); v != "" {
+		if ta, err := money.ParseDecimal(v); err == nil {
+			in.ToAmount = ta
+		}
+	}
+	if v := strings.TrimSpace(req.PostFormValue("end_date")); v != "" {
+		if end, err := time.Parse("2006-01-02", v); err == nil {
+			in.EndDate = &end
+		}
+	}
+	return in, true
+}
+
+// parseRecurringAction reads the id + occurrence date carried by a post/skip form.
+func parseRecurringAction(req *http.Request) (int64, time.Time, bool) {
+	if err := req.ParseForm(); err != nil {
+		return 0, time.Time{}, false
+	}
+	id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+	if err != nil {
+		return 0, time.Time{}, false
+	}
+	occ, err := time.Parse("2006-01-02", req.PostFormValue("occurrence"))
+	if err != nil {
+		return 0, time.Time{}, false
+	}
+	return id, occ, true
+}
+
+// formFromRequest re-reads a submitted form back into RecurringForm so a failed
+// create/edit re-renders with the owner's entries intact (id 0 ⇒ create).
+func formFromRequest(req *http.Request, id int64) web.RecurringForm {
+	_ = req.ParseForm()
+	interval, _ := strconv.Atoi(req.PostFormValue("interval_n"))
+	if interval < 1 {
+		interval = 1
+	}
+	return web.RecurringForm{
+		ID:            id,
+		Type:          req.PostFormValue("type"),
+		AccountID:     parseID(req.PostFormValue("account_id")),
+		FromAccountID: parseID(req.PostFormValue("from_account_id")),
+		ToAccountID:   parseID(req.PostFormValue("to_account_id")),
+		Amount:        req.PostFormValue("amount"),
+		ToAmount:      req.PostFormValue("to_amount"),
+		CategoryID:    parseID(req.PostFormValue("category_id")),
+		Cadence:       req.PostFormValue("cadence"),
+		IntervalN:     interval,
+		StartDate:     req.PostFormValue("start_date"),
+		EndDate:       req.PostFormValue("end_date"),
+		Description:   req.PostFormValue("description"),
+	}
+}
+
+// toRecurringForm pre-fills the edit form from a stored template. The single
+// income/expense account is derived from the money leg; amounts render in the
+// pt-BR input convention and dates as the HTML date-input value.
+func toRecurringForm(r recurring.Recurring) web.RecurringForm {
+	f := web.RecurringForm{
+		ID:            r.ID,
+		Type:          r.Type,
+		FromAccountID: r.FromAccountID,
+		ToAccountID:   r.ToAccountID,
+		Amount:        money.FormatDecimal(r.Amount.Amount()),
+		CategoryID:    r.CategoryID,
+		Cadence:       r.Cadence,
+		IntervalN:     r.IntervalN,
+		StartDate:     r.StartDate.Format("2006-01-02"),
+		Description:   r.Description,
+	}
+	switch r.Type {
+	case recurring.Income:
+		f.AccountID = r.ToAccountID
+	case recurring.Expense:
+		f.AccountID = r.FromAccountID
+	case recurring.Transfer:
+		if r.CrossCurrency {
+			f.ToAmount = money.FormatDecimal(r.ToAmount.Amount())
+		}
+	}
+	if r.EndDate != nil {
+		f.EndDate = r.EndDate.Format("2006-01-02")
+	}
+	return f
+}
+
+func renderRecurring(deps Deps, w http.ResponseWriter, req *http.Request, form web.RecurringForm, errMsg string, code int) {
+	var templates, due []web.RecurringRow
+	if list, err := deps.Recurring.List(req.Context()); err != nil {
+		logLoad(req, "recurring list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	} else {
+		for _, r := range list {
+			row := mapRecurringRow(r)
+			templates = append(templates, row)
+			if r.Due {
+				due = append(due, row)
+			}
+		}
+	}
+
+	// The form's account + category pickers are secondary: a failure degrades to
+	// empty dropdowns (logged), it does not fail the page.
+	var accounts []web.FilterOption
+	if accts, err := deps.Accounts.List(req.Context(), false); err != nil {
+		logLoad(req, "recurring accounts", err)
+	} else {
+		for _, a := range accts {
+			accounts = append(accounts, web.FilterOption{ID: a.ID, Label: a.Name})
+		}
+	}
+	var cats []web.CategoryOption
+	if cs, err := deps.Categories.List(req.Context()); err != nil {
+		logLoad(req, "recurring categories", err)
+	} else {
+		for _, c := range cs {
+			cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.RecurringPage(shellData(deps, req.Context(), "recurring"), form, accounts, cats, due, templates, errMsg).Render(req.Context(), w)
+}
+
+// mapRecurringRow formats a service template for display.
+func mapRecurringRow(r recurring.Recurring) web.RecurringRow {
+	row := web.RecurringRow{
+		ID:            r.ID,
+		Type:          r.Type,
+		TypeLabel:     recurringTypeLabel(r.Type),
+		Category:      r.CategoryName,
+		Amount:        r.Amount.Display(),
+		CrossCurrency: r.CrossCurrency,
+		Cadence:       cadencePhrase(r.Cadence, r.IntervalN),
+		StartDate:     r.StartDate.Format("02/01/2006"),
+		EndDate:       "—",
+		NextDue:       r.NextDue.Format("02/01/2006"),
+		NextDueValue:  r.NextDue.Format("2006-01-02"),
+		Description:   r.Description,
+		Due:           r.Due,
+	}
+	switch r.Type {
+	case recurring.Income:
+		row.Account = r.ToAccount
+	case recurring.Expense:
+		row.Account = r.FromAccount
+	case recurring.Transfer:
+		row.Account = r.FromAccount + " → " + r.ToAccount
+		if r.CrossCurrency {
+			row.ToAmount = r.ToAmount.Display()
+		}
+	}
+	if r.EndDate != nil {
+		row.EndDate = r.EndDate.Format("02/01/2006")
+	}
+	return row
+}
+
+// recurringTypeLabel maps a template type to its pt-BR label.
+func recurringTypeLabel(t string) string {
+	switch t {
+	case recurring.Income:
+		return "Receita"
+	case recurring.Transfer:
+		return "Transferência"
+	default:
+		return "Despesa"
+	}
+}
+
+// cadencePhrase renders "a cada N unidade(s)" in pt-BR.
+func cadencePhrase(cadence string, n int) string {
+	unit := map[string]string{"weeks": "semana(s)", "months": "mês(es)", "years": "ano(s)"}[cadence]
+	return "a cada " + strconv.Itoa(n) + " " + unit
+}
+
+// parseID parses a form id, treating blank/"0"/invalid as 0 (no selection).
+func parseID(s string) int64 {
+	id, _ := strconv.ParseInt(s, 10, 64)
+	return id
+}
+
 func analyticsPage(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		months := analyticsMonths(req)
@@ -1854,6 +2230,16 @@ func dashboardPage(deps Deps) http.HandlerFunc {
 		// change. A load failure simply hides it (the page still renders).
 		if ins, iErr := deps.Valuation.Insight(req.Context()); iErr == nil {
 			view.Insight = buildInsight(ins)
+		}
+
+		// Recurring nudge (Story 9.2) — how many templates are due to post. A load
+		// failure just hides the nudge (the page still renders).
+		if deps.Recurring != nil {
+			if dueRows, dErr := deps.Recurring.Due(req.Context()); dErr == nil {
+				view.DueCount = len(dueRows)
+			} else {
+				logLoad(req, "dashboard recurring due", dErr)
+			}
 		}
 
 		// Recent-activity widget (Story 5.5, UX-DR5) — the newest ledger rows,

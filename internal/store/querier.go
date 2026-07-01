@@ -28,11 +28,19 @@ type Querier interface {
 	// when the STMTTRN has none). category_id and import_hash default NULL — OFX
 	// dedup is FITID-only, never the tab importer's content hash.
 	CreateOFXTransaction(ctx context.Context, arg CreateOFXTransactionParams) (int64, error)
+	// Recurring transaction templates (Epic 9 / FR-20). One-row ledger convention:
+	// income credits to_account_id, expense debits from_account_id, a transfer
+	// populates both; to_amount is the cross-currency destination leg (0 otherwise).
+	// next_due is the authored schedule cursor advanced on post/skip (UpdateRecurringNextDue).
+	// GetRecurringForUpdate row-locks the template so a post/skip serializes against a
+	// concurrent one (idempotent one-click posting — no double-post of an occurrence).
+	CreateRecurring(ctx context.Context, arg CreateRecurringParams) (Recurring, error)
 	CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	DeleteBudget(ctx context.Context, categoryID int64) (int64, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
 	DeleteCategoryRule(ctx context.Context, id int64) (int64, error)
+	DeleteRecurring(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
 	// Full-row export queries for Story 6.1 (authored-data backup). Each SELECT
 	// lists exactly its table's columns and ORDERs BY id, so sqlc returns the
@@ -49,6 +57,8 @@ type Querier interface {
 	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
+	GetRecurring(ctx context.Context, id int64) (Recurring, error)
+	GetRecurringForUpdate(ctx context.Context, id int64) (Recurring, error)
 	GetSecurity(ctx context.Context, id int64) (Security, error)
 	GetSecurityBySymbol(ctx context.Context, symbol string) (Security, error)
 	// $1 is cast to a calendar DATE so "effective on or before today" is a stable
@@ -87,6 +97,9 @@ type Querier interface {
 	// are excluded by it — do NOT loosen it. Ordered by date for a stable sequence.
 	ListLedgerForAnalytics(ctx context.Context, arg ListLedgerForAnalyticsParams) ([]ListLedgerForAnalyticsRow, error)
 	ListPrices(ctx context.Context) ([]ListPricesRow, error)
+	// Every template with its account and category names joined for display, ordered
+	// by next_due then id so the soonest-due surface first.
+	ListRecurring(ctx context.Context) ([]ListRecurringRow, error)
 	ListSecurities(ctx context.Context) ([]Security, error)
 	ListTransactions(ctx context.Context) ([]Transaction, error)
 	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
@@ -123,6 +136,8 @@ type Querier interface {
 	// the categories list).
 	SetBudget(ctx context.Context, arg SetBudgetParams) (Budget, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
+	UpdateRecurring(ctx context.Context, arg UpdateRecurringParams) (int64, error)
+	UpdateRecurringNextDue(ctx context.Context, arg UpdateRecurringNextDueParams) (int64, error)
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (int64, error)
 }
 

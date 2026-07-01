@@ -27,6 +27,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/importer"
 	"github.com/claudioaprado/financas/internal/service/price"
+	"github.com/claudioaprado/financas/internal/service/recurring"
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/service/valuation"
@@ -586,6 +587,104 @@ func (s *stubBudgets) Delete(_ context.Context, categoryID int64) error {
 	return budget.ErrNotFound
 }
 
+// stubRecurring is an in-memory Recurring for handler tests (Epic 9). It records
+// posts/skips by id so the handlers' materialize/advance calls can be asserted.
+type stubRecurring struct {
+	items     []recurring.Recurring
+	nextID    int64
+	posted    []int64
+	skipped   []int64
+	createErr error
+}
+
+func (s *stubRecurring) Create(_ context.Context, in recurring.Input) (int64, error) {
+	if s.createErr != nil {
+		return 0, s.createErr
+	}
+	if in.Type != recurring.Income && in.Type != recurring.Expense && in.Type != recurring.Transfer {
+		return 0, recurring.ErrInvalidType
+	}
+	if !in.Amount.IsPositive() {
+		return 0, recurring.ErrNonPositiveAmount
+	}
+	s.nextID++
+	r := recurring.Recurring{
+		ID: s.nextID, Type: in.Type, Amount: money.New(in.Amount, money.USD),
+		CategoryID: in.CategoryID, Cadence: in.Cadence, IntervalN: in.IntervalN,
+		StartDate: in.StartDate, EndDate: in.EndDate, NextDue: in.StartDate,
+		Description: in.Description, Due: true,
+	}
+	switch in.Type {
+	case recurring.Income:
+		r.ToAccountID = in.AccountID
+	case recurring.Expense:
+		r.FromAccountID = in.AccountID
+	case recurring.Transfer:
+		r.FromAccountID, r.ToAccountID = in.FromAccountID, in.ToAccountID
+	}
+	s.items = append(s.items, r)
+	return s.nextID, nil
+}
+
+func (s *stubRecurring) Edit(_ context.Context, id int64, in recurring.Input) error {
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.items[i].Amount = money.New(in.Amount, money.USD)
+			s.items[i].Description = in.Description
+			s.items[i].Cadence = in.Cadence
+			s.items[i].IntervalN = in.IntervalN
+			return nil
+		}
+	}
+	return recurring.ErrNotFound
+}
+
+func (s *stubRecurring) Delete(_ context.Context, id int64) error {
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.items = append(s.items[:i], s.items[i+1:]...)
+			return nil
+		}
+	}
+	return recurring.ErrNotFound
+}
+
+func (s *stubRecurring) List(_ context.Context) ([]recurring.Recurring, error) {
+	return s.items, nil
+}
+
+func (s *stubRecurring) Due(_ context.Context) ([]recurring.Recurring, error) {
+	out := []recurring.Recurring{}
+	for _, r := range s.items {
+		if r.Due {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubRecurring) Post(_ context.Context, id int64, _ time.Time) error {
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.posted = append(s.posted, id)
+			s.items[i].Due = false
+			return nil
+		}
+	}
+	return recurring.ErrNotFound
+}
+
+func (s *stubRecurring) Skip(_ context.Context, id int64, _ time.Time) error {
+	for i := range s.items {
+		if s.items[i].ID == id {
+			s.skipped = append(s.skipped, id)
+			s.items[i].Due = false
+			return nil
+		}
+	}
+	return recurring.ErrNotFound
+}
+
 // stubAnalytics is an in-memory Analytics for handler tests.
 type stubAnalytics struct {
 	report domain.Analytics
@@ -898,6 +997,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		CategoryRules: &stubCategoryRules{},
 		Budgets:       &stubBudgets{},
 		Analytics:     &stubAnalytics{report: cannedAnalytics()},
+		Recurring:     &stubRecurring{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
@@ -1960,6 +2060,7 @@ func TestHoldingValuationColumns(t *testing.T) {
 		CategoryRules: &stubCategoryRules{},
 		Budgets:       &stubBudgets{},
 		Analytics:     &stubAnalytics{report: cannedAnalytics()},
+		Recurring:     &stubRecurring{},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
@@ -2305,6 +2406,83 @@ func TestBudgetsPage(t *testing.T) {
 	router.ServeHTTP(recDel, withCookie(del, cookie))
 	if recDel.Code != http.StatusSeeOther || len(budgets.budgets) != 0 {
 		t.Fatalf("delete budget = %d, budgets = %+v", recDel.Code, budgets.budgets)
+	}
+}
+
+// TestRecurringPage exercises the /recurring flow (Epic 9): auth gate, page
+// render, creating a template, posting and skipping a due occurrence, and delete.
+func TestRecurringPage(t *testing.T) {
+	deps := testDeps(true, nil)
+	rec := &stubRecurring{}
+	deps.Recurring = rec
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Auth gate.
+	recUnauth := httptest.NewRecorder()
+	NewRouter(testDeps(false, nil)).ServeHTTP(recUnauth, httptest.NewRequest(http.MethodGet, "/recurring", nil))
+	if recUnauth.Code != http.StatusSeeOther {
+		t.Fatalf("unauth recurring = %d, want 303", recUnauth.Code)
+	}
+
+	// Page renders with the heading and the new-template form.
+	recForm := httptest.NewRecorder()
+	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/recurring", nil), cookie))
+	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Transações recorrentes") {
+		t.Fatalf("recurring page = %d, missing heading", recForm.Code)
+	}
+
+	// Create a monthly expense with a Brazilian-format amount.
+	recCreate := httptest.NewRecorder()
+	create := httptest.NewRequest(http.MethodPost, "/recurring", strings.NewReader(
+		"type=expense&account_id=1&amount=1.234,56&cadence=months&interval_n=1&start_date=2026-01-15&description=Netflix"))
+	create.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recCreate, withCookie(create, cookie))
+	if recCreate.Code != http.StatusSeeOther || len(rec.items) != 1 ||
+		!rec.items[0].Amount.Amount().Equal(decimal.RequireFromString("1234.56")) {
+		t.Fatalf("create recurring = %d, items = %+v", recCreate.Code, rec.items)
+	}
+	id := rec.items[0].ID
+
+	// The due occurrence surfaces and posts in one click.
+	recPost := httptest.NewRecorder()
+	post := httptest.NewRequest(http.MethodPost, "/recurring/post", strings.NewReader(
+		"id="+fmt.Sprintf("%d", id)+"&occurrence=2026-01-15"))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recPost, withCookie(post, cookie))
+	if recPost.Code != http.StatusSeeOther || len(rec.posted) != 1 || rec.posted[0] != id {
+		t.Fatalf("post recurring = %d, posted = %v", recPost.Code, rec.posted)
+	}
+
+	// A malformed occurrence date is rejected (400).
+	recBad := httptest.NewRecorder()
+	bad := httptest.NewRequest(http.MethodPost, "/recurring/post", strings.NewReader("id=1&occurrence=notadate"))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recBad, withCookie(bad, cookie))
+	if recBad.Code != http.StatusBadRequest {
+		t.Fatalf("post bad occurrence = %d, want 400", recBad.Code)
+	}
+
+	// Skip advances without posting.
+	recSkip := httptest.NewRecorder()
+	skip := httptest.NewRequest(http.MethodPost, "/recurring/skip", strings.NewReader(
+		"id="+fmt.Sprintf("%d", id)+"&occurrence=2026-02-15"))
+	skip.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recSkip, withCookie(skip, cookie))
+	if recSkip.Code != http.StatusSeeOther || len(rec.skipped) != 1 {
+		t.Fatalf("skip recurring = %d, skipped = %v", recSkip.Code, rec.skipped)
+	}
+
+	// Delete removes it.
+	recDel := httptest.NewRecorder()
+	del := httptest.NewRequest(http.MethodPost, "/recurring/delete", strings.NewReader("id="+fmt.Sprintf("%d", id)))
+	del.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recDel, withCookie(del, cookie))
+	if recDel.Code != http.StatusSeeOther || len(rec.items) != 0 {
+		t.Fatalf("delete recurring = %d, items = %+v", recDel.Code, rec.items)
 	}
 }
 
