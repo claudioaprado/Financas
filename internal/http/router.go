@@ -2746,7 +2746,7 @@ var allocPalette = []string{"alloc-1", "alloc-2", "alloc-3", "alloc-4", "alloc-5
 // groups → the empty state. The arcs use the reconciled integer percents (which
 // sum to 100), so the ring is whole.
 func buildAllocation(a valuation.Allocation, rng string) web.AllocationView {
-	bys := []web.AllocBy{{Key: "security", Label: "Ativo"}, {Key: "account", Label: "Conta"}}
+	bys := []web.AllocBy{{Key: "security", Label: "Ativo"}, {Key: "account", Label: "Conta"}, {Key: "category", Label: "Categoria"}}
 	active := valuation.AllocBy(a.By)
 	for i := range bys {
 		bys[i].Href = "/?range=" + rng + "&by=" + bys[i].Key

@@ -42,6 +42,7 @@ type HoldingValuation struct {
 	SecurityID     int64
 	Symbol         string
 	Name           string
+	AssetCategory  string // owner-defined category name, or "" if uncategorized
 	Currency       money.Currency
 	Quantity       decimal.Decimal
 	HasPrice       bool
@@ -208,6 +209,7 @@ func (s *Service) portfolioAsOf(ctx context.Context, asOf time.Time) (Portfolio,
 				SecurityID:     h.SecurityID,
 				Symbol:         m.symbol,
 				Name:           m.name,
+				AssetCategory:  m.assetCategory,
 				Currency:       cur,
 				Quantity:       h.Quantity,
 				CostBasis:      h.CostBasis,
@@ -511,11 +513,18 @@ type Allocation struct {
 // AllocBy normalizes the breakdown-dimension query value to a supported key,
 // defaulting to "security".
 func AllocBy(by string) string {
-	if by == "account" {
+	switch by {
+	case "account":
 		return "account"
+	case "category":
+		return "category"
+	default:
+		return "security"
 	}
-	return "security"
 }
+
+// uncategorizedLabel groups holdings whose security has no asset category.
+const uncategorizedLabel = "Sem categoria"
 
 // Allocation derives the invested-value breakdown as of now for the given
 // dimension ("security" default, or "account"). It reuses the portfolio
@@ -539,8 +548,14 @@ func (s *Service) Allocation(ctx context.Context, by string) (Allocation, error)
 			continue // unpriced holdings are not invested value (consistent with PortfolioValue)
 		}
 		key := h.Symbol
-		if by == "account" {
+		switch by {
+		case "account":
 			key = h.AccountName
+		case "category":
+			key = h.AssetCategory
+			if key == "" {
+				key = uncategorizedLabel
+			}
 		}
 		items = append(items, domain.AllocItem{Key: key, Value: h.Valuation})
 		natives = append(natives, h.Valuation)
@@ -659,19 +674,33 @@ func (s *Service) buildRates(ctx context.Context, q *store.Queries, display mone
 
 // secMeta is a security's display fields.
 type secMeta struct {
-	symbol string
-	name   string
+	symbol        string
+	name          string
+	assetCategory string // category name, or "" if uncategorized
 }
 
-// securityMeta builds an id->{symbol,name} map for labelling holding rows.
+// securityMeta builds an id->{symbol,name,assetCategory} map for labelling holding
+// rows, resolving each security's asset-category id to its name.
 func securityMeta(ctx context.Context, q *store.Queries) (map[int64]secMeta, error) {
 	secs, err := q.ListSecurities(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("valuation: list securities: %w", err)
 	}
+	cats, err := q.ListAssetCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("valuation: list asset categories: %w", err)
+	}
+	catName := make(map[int64]string, len(cats))
+	for _, c := range cats {
+		catName[c.ID] = c.Name
+	}
 	m := make(map[int64]secMeta, len(secs))
 	for _, sec := range secs {
-		m[sec.ID] = secMeta{symbol: sec.Symbol, name: sec.Name}
+		name := ""
+		if sec.AssetCategoryID.Valid {
+			name = catName[sec.AssetCategoryID.Int64]
+		}
+		m[sec.ID] = secMeta{symbol: sec.Symbol, name: sec.Name, assetCategory: name}
 	}
 	return m, nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/assetcategory"
 	"github.com/claudioaprado/financas/internal/service/exchangerate"
 	"github.com/claudioaprado/financas/internal/service/price"
 	"github.com/claudioaprado/financas/internal/service/security"
@@ -789,6 +790,33 @@ func TestAllocation(t *testing.T) {
 	}
 	if len(byAcct.Groups) != 2 || byAcct.Groups[0].Key != brokerUSD.Name || byAcct.Groups[0].Percent != 80 {
 		t.Errorf("by-account group[0] = %+v, want {%s, 80}", byAcct.Groups[0], brokerUSD.Name)
+	}
+
+	// ---- by=category groups by the security's asset category; an unassigned
+	// security folds into "Sem categoria". USD sec → CatA (4000, 80%); BRL sec
+	// left uncategorized (1000, 20%). ----
+	catA, err := assetcategory.New(pool).Create(ctx, fmt.Sprintf("CatA-%d", run))
+	if err != nil {
+		t.Fatalf("create asset category: %v", err)
+	}
+	if err := secs.SetCategory(ctx, usdSec.ID, catA.ID); err != nil {
+		t.Fatalf("assign category: %v", err)
+	}
+	byCat, err := svc.Allocation(ctx, "category")
+	if err != nil {
+		t.Fatalf("allocation (category): %v", err)
+	}
+	if byCat.By != "category" {
+		t.Errorf("By = %q, want category", byCat.By)
+	}
+	if len(byCat.Groups) != 2 {
+		t.Fatalf("by-category groups = %d, want 2", len(byCat.Groups))
+	}
+	if byCat.Groups[0].Key != catA.Name || byCat.Groups[0].Percent != 80 {
+		t.Errorf("by-category group[0] = %+v, want {%s, 80}", byCat.Groups[0], catA.Name)
+	}
+	if byCat.Groups[1].Key != uncategorizedLabel || byCat.Groups[1].Percent != 20 {
+		t.Errorf("by-category group[1] = %+v, want {%s, 20}", byCat.Groups[1], uncategorizedLabel)
 	}
 }
 
