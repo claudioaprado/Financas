@@ -883,6 +883,16 @@ func (s *stubSecurities) Create(_ context.Context, symbol, name string, typ secu
 	return sec, nil
 }
 
+func (s *stubSecurities) SetCategory(_ context.Context, securityID, assetCategoryID int64) error {
+	for i := range s.secs {
+		if s.secs[i].ID == securityID {
+			s.secs[i].AssetCategoryID = assetCategoryID
+			return nil
+		}
+	}
+	return security.ErrNotFound
+}
+
 func (s *stubSecurities) List(_ context.Context) ([]security.Security, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
@@ -1766,6 +1776,54 @@ func TestAccountsInvalidCreate(t *testing.T) {
 	router.ServeHTTP(rec, withCookie(bad, cookie))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST empty-name account = %d, want 400", rec.Code)
+	}
+}
+
+func TestSecuritiesAssignCategory(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		return rec
+	}
+	securitiesBody := func() string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/securities", nil), cookie))
+		return rec.Body.String()
+	}
+
+	// A category to assign (stub id = 1).
+	if rec := post("/asset-categories", "name=RendaVariavel"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create category = %d, want 303", rec.Code)
+	}
+	// Create a security assigned to that category at creation (id=1 + SetCategory).
+	if rec := post("/securities", "symbol=PETR4&name=Petrobras&type=stock&quote_currency=BRL&asset_category_id=1"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create security = %d, want 303", rec.Code)
+	}
+	b := securitiesBody()
+	if !strings.Contains(b, "PETR4") || !strings.Contains(b, "RendaVariavel") {
+		t.Errorf("securities page missing the security or its category")
+	}
+	// The category option is selected for that security.
+	if !strings.Contains(b, `value="1" selected`) {
+		t.Errorf("assigned category not marked selected")
+	}
+	// Reassign to none (clear).
+	if rec := post("/securities/category", "id=1&asset_category_id=0"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("clear category = %d, want 303", rec.Code)
+	}
+	if strings.Contains(securitiesBody(), `value="1" selected`) {
+		t.Errorf("category still selected after clearing")
+	}
+	// Assigning to a missing security is a 400.
+	if rec := post("/securities/category", "id=999&asset_category_id=1"); rec.Code != http.StatusBadRequest {
+		t.Errorf("assign to missing security = %d, want 400", rec.Code)
 	}
 }
 

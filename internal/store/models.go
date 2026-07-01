@@ -92,12 +92,13 @@ type Recurring struct {
 }
 
 type Security struct {
-	ID            int64
-	Symbol        string
-	Name          string
-	Type          string
-	QuoteCurrency string
-	CreatedAt     pgtype.Timestamptz
+	ID              int64
+	Symbol          string
+	Name            string
+	Type            string
+	QuoteCurrency   string
+	CreatedAt       pgtype.Timestamptz
+	AssetCategoryID pgtype.Int8
 }
 
 type Tag struct {

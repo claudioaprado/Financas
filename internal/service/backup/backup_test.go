@@ -384,9 +384,14 @@ func seedSample(t *testing.T, pool *pgxpool.Pool) int64 {
 	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Expense, req("40.25"), dt(t, "2026-06-04"), "lunch", 0); err != nil {
 		t.Fatalf("expense: %v", err)
 	}
-	// An owner-defined asset category must survive the round-trip too.
-	if _, err := assetcategory.New(pool).Create(ctx, "Ações BR"); err != nil {
+	// An owner-defined asset category (assigned to a security) must survive the
+	// round-trip too — exercising security.asset_category_id.
+	ac, err := assetcategory.New(pool).Create(ctx, "Ações BR")
+	if err != nil {
 		t.Fatalf("asset category: %v", err)
+	}
+	if err := secs.SetCategory(ctx, sec.ID, ac.ID); err != nil {
+		t.Fatalf("assign category: %v", err)
 	}
 	// Phase-2 authored tables (Epics 8-10) must survive the round-trip too.
 	if err := budget.New(pool).Set(ctx, salary.ID, req("2000")); err != nil {

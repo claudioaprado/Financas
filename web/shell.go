@@ -524,10 +524,13 @@ type SecurityTypeOption struct {
 
 // SecurityRow is one security on the securities page.
 type SecurityRow struct {
-	Symbol        string
-	Name          string
-	TypeLabel     string
-	QuoteCurrency string
+	ID              int64
+	Symbol          string
+	Name            string
+	TypeLabel       string
+	QuoteCurrency   string
+	AssetCategoryID int64  // 0 ⇒ uncategorized
+	AssetCategory   string // category name, or "" if uncategorized
 }
 
 // FilterOption is one <option> in a register filter dropdown.

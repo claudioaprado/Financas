@@ -7,19 +7,22 @@ package store
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createSecurity = `-- name: CreateSecurity :one
-INSERT INTO security (symbol, name, type, quote_currency)
-VALUES ($1, $2, $3, $4)
-RETURNING id, symbol, name, type, quote_currency, created_at
+INSERT INTO security (symbol, name, type, quote_currency, asset_category_id)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, symbol, name, type, quote_currency, created_at, asset_category_id
 `
 
 type CreateSecurityParams struct {
-	Symbol        string
-	Name          string
-	Type          string
-	QuoteCurrency string
+	Symbol          string
+	Name            string
+	Type            string
+	QuoteCurrency   string
+	AssetCategoryID pgtype.Int8
 }
 
 func (q *Queries) CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error) {
@@ -28,6 +31,7 @@ func (q *Queries) CreateSecurity(ctx context.Context, arg CreateSecurityParams) 
 		arg.Name,
 		arg.Type,
 		arg.QuoteCurrency,
+		arg.AssetCategoryID,
 	)
 	var i Security
 	err := row.Scan(
@@ -37,12 +41,13 @@ func (q *Queries) CreateSecurity(ctx context.Context, arg CreateSecurityParams) 
 		&i.Type,
 		&i.QuoteCurrency,
 		&i.CreatedAt,
+		&i.AssetCategoryID,
 	)
 	return i, err
 }
 
 const getSecurity = `-- name: GetSecurity :one
-SELECT id, symbol, name, type, quote_currency, created_at FROM security WHERE id = $1
+SELECT id, symbol, name, type, quote_currency, created_at, asset_category_id FROM security WHERE id = $1
 `
 
 func (q *Queries) GetSecurity(ctx context.Context, id int64) (Security, error) {
@@ -55,12 +60,13 @@ func (q *Queries) GetSecurity(ctx context.Context, id int64) (Security, error) {
 		&i.Type,
 		&i.QuoteCurrency,
 		&i.CreatedAt,
+		&i.AssetCategoryID,
 	)
 	return i, err
 }
 
 const getSecurityBySymbol = `-- name: GetSecurityBySymbol :one
-SELECT id, symbol, name, type, quote_currency, created_at FROM security WHERE symbol = $1
+SELECT id, symbol, name, type, quote_currency, created_at, asset_category_id FROM security WHERE symbol = $1
 `
 
 func (q *Queries) GetSecurityBySymbol(ctx context.Context, symbol string) (Security, error) {
@@ -73,12 +79,13 @@ func (q *Queries) GetSecurityBySymbol(ctx context.Context, symbol string) (Secur
 		&i.Type,
 		&i.QuoteCurrency,
 		&i.CreatedAt,
+		&i.AssetCategoryID,
 	)
 	return i, err
 }
 
 const listSecurities = `-- name: ListSecurities :many
-SELECT id, symbol, name, type, quote_currency, created_at FROM security ORDER BY symbol, id
+SELECT id, symbol, name, type, quote_currency, created_at, asset_category_id FROM security ORDER BY symbol, id
 `
 
 func (q *Queries) ListSecurities(ctx context.Context) ([]Security, error) {
@@ -97,6 +104,7 @@ func (q *Queries) ListSecurities(ctx context.Context) ([]Security, error) {
 			&i.Type,
 			&i.QuoteCurrency,
 			&i.CreatedAt,
+			&i.AssetCategoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -106,4 +114,21 @@ func (q *Queries) ListSecurities(ctx context.Context) ([]Security, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSecurityCategory = `-- name: SetSecurityCategory :execrows
+UPDATE security SET asset_category_id = $2 WHERE id = $1
+`
+
+type SetSecurityCategoryParams struct {
+	ID              int64
+	AssetCategoryID pgtype.Int8
+}
+
+func (q *Queries) SetSecurityCategory(ctx context.Context, arg SetSecurityCategoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSecurityCategory, arg.ID, arg.AssetCategoryID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

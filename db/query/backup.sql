@@ -12,7 +12,7 @@ SELECT id, name, type, currency, archived, created_at FROM account ORDER BY id;
 SELECT id, name, kind, created_at FROM category ORDER BY id;
 
 -- name: ExportSecurities :many
-SELECT id, symbol, name, type, quote_currency, created_at FROM security ORDER BY id;
+SELECT id, symbol, name, type, quote_currency, created_at, asset_category_id FROM security ORDER BY id;
 
 -- name: ExportExchangeRates :many
 SELECT id, from_currency, to_currency, effective_date, rate, created_at FROM exchange_rate ORDER BY id;
@@ -61,9 +61,9 @@ OVERRIDING SYSTEM VALUE
 VALUES ($1, $2, $3, $4);
 
 -- name: RestoreInsertSecurity :exec
-INSERT INTO security (id, symbol, name, type, quote_currency, created_at)
+INSERT INTO security (id, symbol, name, type, quote_currency, created_at, asset_category_id)
 OVERRIDING SYSTEM VALUE
-VALUES ($1, $2, $3, $4, $5, $6);
+VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: RestoreInsertExchangeRate :exec
 INSERT INTO exchange_rate (id, from_currency, to_currency, effective_date, rate, created_at)

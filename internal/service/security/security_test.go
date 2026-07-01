@@ -92,6 +92,18 @@ func TestSecurity(t *testing.T) {
 		t.Errorf("get missing = %v; want ErrNotFound", err)
 	}
 
+	// SetCategory: clearing (0) is safe; an unknown category id violates the FK;
+	// a missing security is ErrNotFound.
+	if err := svc.SetCategory(ctx, sec.ID, 0); err != nil {
+		t.Errorf("clear category: %v", err)
+	}
+	if err := svc.SetCategory(ctx, sec.ID, 999999999); !errors.Is(err, ErrCategoryNotFound) {
+		t.Errorf("bad category = %v; want ErrCategoryNotFound", err)
+	}
+	if err := svc.SetCategory(ctx, -1, 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("set on missing security = %v; want ErrNotFound", err)
+	}
+
 	// Free-text guards (deferred 4.1): a symbol with interior whitespace and an
 	// over-long name are rejected by the shared validator.
 	if _, err := svc.Create(ctx, fmt.Sprintf("PE TR%d", run), "Spaced", Stock, money.USD); !errors.Is(err, validate.ErrSymbolBadChars) {

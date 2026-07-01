@@ -274,7 +274,7 @@ func (q *Queries) ExportRecurring(ctx context.Context) ([]Recurring, error) {
 }
 
 const exportSecurities = `-- name: ExportSecurities :many
-SELECT id, symbol, name, type, quote_currency, created_at FROM security ORDER BY id
+SELECT id, symbol, name, type, quote_currency, created_at, asset_category_id FROM security ORDER BY id
 `
 
 func (q *Queries) ExportSecurities(ctx context.Context) ([]Security, error) {
@@ -293,6 +293,7 @@ func (q *Queries) ExportSecurities(ctx context.Context) ([]Security, error) {
 			&i.Type,
 			&i.QuoteCurrency,
 			&i.CreatedAt,
+			&i.AssetCategoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -721,18 +722,19 @@ func (q *Queries) RestoreInsertRecurring(ctx context.Context, arg RestoreInsertR
 }
 
 const restoreInsertSecurity = `-- name: RestoreInsertSecurity :exec
-INSERT INTO security (id, symbol, name, type, quote_currency, created_at)
+INSERT INTO security (id, symbol, name, type, quote_currency, created_at, asset_category_id)
 OVERRIDING SYSTEM VALUE
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type RestoreInsertSecurityParams struct {
-	ID            int64
-	Symbol        string
-	Name          string
-	Type          string
-	QuoteCurrency string
-	CreatedAt     pgtype.Timestamptz
+	ID              int64
+	Symbol          string
+	Name            string
+	Type            string
+	QuoteCurrency   string
+	CreatedAt       pgtype.Timestamptz
+	AssetCategoryID pgtype.Int8
 }
 
 func (q *Queries) RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSecurityParams) error {
@@ -743,6 +745,7 @@ func (q *Queries) RestoreInsertSecurity(ctx context.Context, arg RestoreInsertSe
 		arg.Type,
 		arg.QuoteCurrency,
 		arg.CreatedAt,
+		arg.AssetCategoryID,
 	)
 	return err
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/claudioaprado/financas/internal/money"
@@ -61,6 +62,8 @@ var (
 	ErrDuplicateSymbol     = errors.New("security: a security with that symbol already exists")
 	// ErrNotFound means no security matched the given id.
 	ErrNotFound = errors.New("security: not found")
+	// ErrCategoryNotFound means the assigned asset category id does not exist.
+	ErrCategoryNotFound = errors.New("security: asset category not found")
 )
 
 // Security is one instrument the owner trades. Holdings and valuation are derived
@@ -71,7 +74,9 @@ type Security struct {
 	Name          string
 	Type          SecurityType
 	QuoteCurrency money.Currency
-	CreatedAt     time.Time
+	// AssetCategoryID is the owner-defined asset category, or 0 if uncategorized.
+	AssetCategoryID int64
+	CreatedAt       time.Time
 }
 
 // Service creates and lists securities.
@@ -135,6 +140,37 @@ func (s *Service) Create(ctx context.Context, symbol, name string, typ SecurityT
 	return toSecurity(row), nil
 }
 
+// SetCategory assigns a security's asset category, or clears it when
+// assetCategoryID is 0. A missing security returns ErrNotFound; an unknown
+// category id violates the FK and returns ErrCategoryNotFound. It writes inside
+// one transaction (AD-3).
+func (s *Service) SetCategory(ctx context.Context, securityID, assetCategoryID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("security: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	n, err := store.New(tx).SetSecurityCategory(ctx, store.SetSecurityCategoryParams{
+		ID:              securityID,
+		AssetCategoryID: int8OrNull(assetCategoryID),
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrCategoryNotFound
+		}
+		return fmt.Errorf("security: set category: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("security: commit: %w", err)
+	}
+	return nil
+}
+
 // Get returns one security by id, or ErrNotFound if none matches.
 func (s *Service) Get(ctx context.Context, id int64) (Security, error) {
 	row, err := store.New(s.pool).GetSecurity(ctx, id)
@@ -162,11 +198,28 @@ func (s *Service) List(ctx context.Context) ([]Security, error) {
 
 func toSecurity(r store.Security) Security {
 	return Security{
-		ID:            r.ID,
-		Symbol:        r.Symbol,
-		Name:          r.Name,
-		Type:          SecurityType(r.Type),
-		QuoteCurrency: money.Currency(r.QuoteCurrency),
-		CreatedAt:     r.CreatedAt.Time,
+		ID:              r.ID,
+		Symbol:          r.Symbol,
+		Name:            r.Name,
+		Type:            SecurityType(r.Type),
+		QuoteCurrency:   money.Currency(r.QuoteCurrency),
+		AssetCategoryID: nullInt8(r.AssetCategoryID),
+		CreatedAt:       r.CreatedAt.Time,
 	}
+}
+
+// int8OrNull maps a category id to a nullable column value (0 ⇒ NULL/none).
+func int8OrNull(id int64) pgtype.Int8 {
+	if id <= 0 {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
+}
+
+// nullInt8 maps a nullable column value to an id (0 ⇒ none).
+func nullInt8(v pgtype.Int8) int64 {
+	if v.Valid {
+		return v.Int64
+	}
+	return 0
 }

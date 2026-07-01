@@ -190,6 +190,7 @@ type Querier interface {
 	// the categories list).
 	SetBudget(ctx context.Context, arg SetBudgetParams) (Budget, error)
 	SetDisplayCurrency(ctx context.Context, displayCurrency string) error
+	SetSecurityCategory(ctx context.Context, arg SetSecurityCategoryParams) (int64, error)
 	SetTransactionNote(ctx context.Context, arg SetTransactionNoteParams) (int64, error)
 	UpdateRecurring(ctx context.Context, arg UpdateRecurringParams) (int64, error)
 	UpdateRecurringNextDue(ctx context.Context, arg UpdateRecurringNextDueParams) (int64, error)

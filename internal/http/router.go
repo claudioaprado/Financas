@@ -164,6 +164,7 @@ type Recurring interface {
 // side) and implemented by service/security.
 type Securities interface {
 	Create(ctx context.Context, symbol, name string, typ security.SecurityType, quote money.Currency) (security.Security, error)
+	SetCategory(ctx context.Context, securityID, assetCategoryID int64) error
 	List(ctx context.Context) ([]security.Security, error)
 }
 
@@ -303,6 +304,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
+		pr.Post("/securities/category", securitiesSetCategory(deps))
 		pr.Get("/analytics", analyticsPage(deps))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
@@ -462,6 +464,8 @@ func knownErrMsg(err error) (string, bool) {
 		return "Já existe um ativo com esse código.", true
 	case errors.Is(err, security.ErrNotFound):
 		return "Ativo não encontrado.", true
+	case errors.Is(err, security.ErrCategoryNotFound):
+		return "Categoria de ativo não encontrada.", true
 	// shared free-text validation (accounts, categories, securities)
 	case errors.Is(err, validate.ErrNameTooLong):
 		return fmt.Sprintf("O nome é muito longo (máx. %d caracteres).", validate.MaxNameLen), true
@@ -2203,8 +2207,36 @@ func securitiesCreate(deps Deps) http.HandlerFunc {
 		name := req.PostFormValue("name")
 		typ := security.SecurityType(req.PostFormValue("type"))
 		quote := money.Currency(req.PostFormValue("quote_currency"))
-		if _, err := deps.Securities.Create(req.Context(), symbol, name, typ, quote); err != nil {
+		catID, _ := strconv.ParseInt(req.PostFormValue("asset_category_id"), 10, 64) // 0 ⇒ uncategorized
+		sec, err := deps.Securities.Create(req.Context(), symbol, name, typ, quote)
+		if err != nil {
 			renderSecurities(deps, w, req, problemMsg(req, "Não foi possível adicionar o ativo. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		if catID > 0 {
+			if err := deps.Securities.SetCategory(req.Context(), sec.ID, catID); err != nil {
+				renderSecurities(deps, w, req, problemMsg(req, "O ativo foi criado, mas não foi possível definir a categoria.", err), http.StatusBadRequest)
+				return
+			}
+		}
+		http.Redirect(w, req, "/securities", http.StatusSeeOther)
+	}
+}
+
+func securitiesSetCategory(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderSecurities(deps, w, req, "ID de ativo inválido.", http.StatusBadRequest)
+			return
+		}
+		catID, _ := strconv.ParseInt(req.PostFormValue("asset_category_id"), 10, 64) // 0 ⇒ clear
+		if err := deps.Securities.SetCategory(req.Context(), id, catID); err != nil {
+			renderSecurities(deps, w, req, problemMsg(req, "Não foi possível atualizar a categoria do ativo. Tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		http.Redirect(w, req, "/securities", http.StatusSeeOther)
@@ -2232,12 +2264,27 @@ func renderSecurities(deps Deps, w http.ResponseWriter, req *http.Request, errMs
 		logLoad(req, "securities list", err)
 		errMsg, code = loadErrorMsg, http.StatusInternalServerError
 	}
+	// Asset categories drive the per-security assign select and the name shown in
+	// the list. A load failure here degrades the assign UI but not the page.
+	catName := map[int64]string{}
+	var catOpts []web.AssetCategoryRow
+	if cats, cErr := deps.AssetCategories.List(req.Context()); cErr != nil {
+		logLoad(req, "asset categories dropdown", cErr)
+	} else {
+		for _, c := range cats {
+			catName[c.ID] = c.Name
+			catOpts = append(catOpts, web.AssetCategoryRow{ID: c.ID, Name: c.Name})
+		}
+	}
 	for _, s := range secs {
 		rows = append(rows, web.SecurityRow{
-			Symbol:        s.Symbol,
-			Name:          s.Name,
-			TypeLabel:     securityTypeLabel(s.Type),
-			QuoteCurrency: string(s.QuoteCurrency),
+			ID:              s.ID,
+			Symbol:          s.Symbol,
+			Name:            s.Name,
+			TypeLabel:       securityTypeLabel(s.Type),
+			QuoteCurrency:   string(s.QuoteCurrency),
+			AssetCategoryID: s.AssetCategoryID,
+			AssetCategory:   catName[s.AssetCategoryID],
 		})
 	}
 	types := []web.SecurityTypeOption{
@@ -2252,7 +2299,7 @@ func renderSecurities(deps Deps, w http.ResponseWriter, req *http.Request, errMs
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.SecuritiesPage(shellData(deps, req.Context(), "settings"), rows, types, codes, errMsg).Render(req.Context(), w)
+	_ = web.SecuritiesPage(shellData(deps, req.Context(), "settings"), rows, types, codes, catOpts, errMsg).Render(req.Context(), w)
 }
 
 // parsePathID reads the numeric {id} path parameter.

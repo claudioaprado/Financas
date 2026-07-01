@@ -93,11 +93,12 @@ type CategoryDTO struct {
 // SecurityDTO mirrors the security table.
 type SecurityDTO struct {
 	ID            int64  `json:"id"`
-	Symbol        string `json:"symbol"`
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	QuoteCurrency string `json:"quote_currency"`
-	CreatedAt     string `json:"created_at,omitempty"`
+	Symbol          string `json:"symbol"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	QuoteCurrency   string `json:"quote_currency"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	AssetCategoryID *int64 `json:"asset_category_id,omitempty"`
 }
 
 // ExchangeRateDTO mirrors the exchange_rate table. Rate is a decimal string.
@@ -275,12 +276,13 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 	}
 	for _, sec := range securities {
 		exp.Securities = append(exp.Securities, SecurityDTO{
-			ID:            sec.ID,
-			Symbol:        sec.Symbol,
-			Name:          sec.Name,
-			Type:          sec.Type,
-			QuoteCurrency: sec.QuoteCurrency,
-			CreatedAt:     timestamp(sec.CreatedAt),
+			ID:              sec.ID,
+			Symbol:          sec.Symbol,
+			Name:            sec.Name,
+			Type:            sec.Type,
+			QuoteCurrency:   sec.QuoteCurrency,
+			CreatedAt:       timestamp(sec.CreatedAt),
+			AssetCategoryID: intPtr(sec.AssetCategoryID),
 		})
 	}
 
@@ -527,6 +529,7 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 		}
 		securities = append(securities, store.RestoreInsertSecurityParams{
 			ID: sec.ID, Symbol: sec.Symbol, Name: sec.Name, Type: sec.Type, QuoteCurrency: sec.QuoteCurrency, CreatedAt: ca,
+			AssetCategoryID: toInt8(sec.AssetCategoryID),
 		})
 	}
 	rates := make([]store.RestoreInsertExchangeRateParams, 0, len(exp.ExchangeRates))
