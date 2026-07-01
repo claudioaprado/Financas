@@ -1,5 +1,14 @@
 # Deferred Work
 
+## ✅ RESOLVED — quality faxina (2026-06-30)
+
+All items below from the 4.x reviews were addressed in three reviewed commits:
+- **`c0d7b83`** — http error-swallowing sweep: primary-load failures → HTTP 500 + banner (no misleading empty-200); secondary loads → log + degrade; the account/import `Get` distinguishes 404 (unknown id) from 500 (DB outage); non-oversold Holdings errors surface.
+- **`21cbc6a`** — raw `err.Error()` echo removed: validation sentinels → pt-BR messages (`knownErrMsg`), unknown errors → generic message + server-side log.
+- **`9e50dea`** — per-security oversold isolation: `DeriveHoldings` no longer aborts the account; an oversold position is excluded + surfaced as a partial-total warning; the Sell guard rejects only the offending security.
+
+Remaining known fragility (NOT a code bug): the `internal/service/settings` suite (`TestDisplayCurrencyLifecycle`) shares the base `financas` DB and assumes `display_currency='USD'` — a live smoke or navigating the app against the base DB can flip it and turn the suite red until restored. Proper fix would be to isolate that suite onto a throwaway DB like the others.
+
 ## Deferred from: code review of 4-1-manage-securities (2026-06-29)
 
 - **`List`-error swallowing renders a misleading empty page (HTTP 200) on a DB outage** — `internal/http/router.go` `renderSecurities`. Pre-existing project-wide convention: accounts (`renderAccounts`), categories (`renderCategories`), and exchange-rates (`renderExchangeRates`) all use `if x, err := …; err == nil` and silently drop the error. Should be fixed across the whole `http` layer at once (surface/log the error, return a non-200), not piecemeal in securities.
