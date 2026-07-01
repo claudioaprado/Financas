@@ -1242,20 +1242,71 @@ templ CategoryRulesPage(data ShellData, categories []CategoryOption, rules []Rul
 	}
 }
 
-// BudgetsPage manages monthly budget targets per category (Story 8.1): a set form
-// (a category + an amount in the Display Currency) and a list with remove. Setting
-// a target for a category that already has one overwrites it (one target per
-// category). The planned-vs-actual view with rollover is Story 8.2.
-templ BudgetsPage(data ShellData, categories []CategoryOption, budgets []BudgetRow, currency, errMsg string) {
+// BudgetsPage is the monthly budget view (Story 8.2): a month selector, then a
+// per-category table of planned (target + carryover) × actual × remaining with
+// rollover — all derived on read in the Display Currency. Each row doubles as the
+// management surface (Story 8.1): the set form below overwrites a category's
+// target (one per category), and each row removes it. A partial-total notice
+// appears when a currency lacked a rate on some transaction date.
+templ BudgetsPage(data ShellData, month, currency string, categories []CategoryOption, rows []BudgetViewRow, notice, errMsg string) {
 	@Shell(data) {
-		<section class="max-w-2xl rounded-card bg-white p-6 shadow-card">
+		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href="/categories" class="text-accent hover:underline">← Categorias</a></p>
 			<h1 class="mt-1 text-2xl font-bold">Orçamento mensal</h1>
-			<p class="mt-1 text-sm text-muted">Defina um valor-alvo mensal por categoria, em { currency } (a sua moeda de exibição). Uma categoria sem alvo simplesmente não tem orçamento.</p>
+			<p class="mt-1 text-sm text-muted">Planejado (alvo + acumulado), realizado e restante por categoria, em { currency }. O acumulado transporta o que sobrou ou faltou dos meses anteriores. Transferências e investimentos não entram.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
-			<form method="post" action="/budgets" class="mt-4 flex flex-wrap items-end gap-3">
+			<form method="get" action="/budgets" class="mt-4 flex items-end gap-2">
+				<div>
+					<label class="block text-xs" for="month">Mês</label>
+					<input id="month" name="month" type="month" value={ month } class="rounded border px-2 py-1 text-sm"/>
+				</div>
+				<button class="rounded border px-3 py-1.5 text-sm" type="submit">Ver</button>
+			</form>
+			if notice != "" {
+				<p class="mt-3 text-sm text-muted">{ notice }</p>
+			}
+			<table class="mt-6 w-full text-sm">
+				<thead>
+					<tr class="text-left text-muted">
+						<th class="py-1">Categoria</th>
+						<th class="text-right">Alvo</th>
+						<th class="text-right">Acumulado</th>
+						<th class="text-right">Planejado</th>
+						<th class="text-right">Realizado</th>
+						<th class="text-right">Restante</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(rows) == 0 {
+						<tr><td colspan="7" class="py-2 text-muted">Nenhum orçamento definido ainda. Defina um alvo abaixo.</td></tr>
+					} else {
+						for _, r := range rows {
+							<tr class="border-t border-black/5">
+								<td class="py-1">{ r.Name } <span class="text-muted">({ r.Kind })</span></td>
+								<td class="text-right tabular-nums">{ r.Target }</td>
+								<td class="text-right tabular-nums">{ r.Carryover }</td>
+								<td class="text-right tabular-nums">{ r.Planned }</td>
+								<td class="text-right tabular-nums">{ r.Actual }</td>
+								<td class={ "text-right font-medium tabular-nums", budgetRemainingClass(r.Favorable) }>{ r.Remaining }</td>
+								<td class="text-right">
+									<form method="post" action="/budgets/delete">
+										<input type="hidden" name="category_id" value={ accountID(r.CategoryID) }/>
+										<input type="hidden" name="month" value={ month }/>
+										<button class="text-loss hover:underline" type="submit">Remover</button>
+									</form>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+			<h2 class="mt-8 text-lg font-semibold">Definir alvo mensal</h2>
+			<p class="mt-1 text-sm text-muted">Um alvo por categoria, em { currency }. Definir de novo substitui o alvo atual.</p>
+			<form method="post" action="/budgets" class="mt-3 flex flex-wrap items-end gap-3">
+				<input type="hidden" name="month" value={ month }/>
 				<div>
 					<label class="block text-xs" for="category_id">Categoria</label>
 					<select id="category_id" name="category_id" class="rounded border px-2 py-1 text-sm">
@@ -1270,35 +1321,6 @@ templ BudgetsPage(data ShellData, categories []CategoryOption, budgets []BudgetR
 				</div>
 				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Salvar alvo</button>
 			</form>
-			<table class="mt-6 w-full text-sm">
-				<thead>
-					<tr class="text-left text-muted">
-						<th class="py-1">Categoria</th>
-						<th>Tipo</th>
-						<th class="text-right">Alvo mensal</th>
-						<th></th>
-					</tr>
-				</thead>
-				<tbody>
-					if len(budgets) == 0 {
-						<tr><td colspan="4" class="py-2 text-muted">Nenhum orçamento definido ainda.</td></tr>
-					} else {
-						for _, b := range budgets {
-							<tr class="border-t border-black/5">
-								<td class="py-1">{ b.CategoryName }</td>
-								<td>{ b.Kind }</td>
-								<td class="text-right">{ b.Target }</td>
-								<td class="text-right">
-									<form method="post" action="/budgets/delete">
-										<input type="hidden" name="category_id" value={ accountID(b.CategoryID) }/>
-										<button class="text-loss hover:underline" type="submit">Remover</button>
-									</form>
-								</td>
-							</tr>
-						}
-					}
-				</tbody>
-			</table>
 		</section>
 	}
 }

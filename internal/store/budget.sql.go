@@ -7,7 +7,9 @@ package store
 
 import (
 	"context"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
 )
 
@@ -53,6 +55,66 @@ func (q *Queries) ListBudgets(ctx context.Context) ([]ListBudgetsRow, error) {
 			&i.Amount,
 			&i.CategoryName,
 			&i.CategoryKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCategorizedForBudget = `-- name: ListCategorizedForBudget :many
+SELECT
+    t.category_id,
+    t.type,
+    t.occurred_on,
+    CAST(CASE WHEN t.type = 'income' THEN t.to_amount ELSE t.from_amount END AS NUMERIC(19, 4)) AS amount,
+    a.currency AS currency
+FROM transaction t
+JOIN account a
+    ON a.id = CASE WHEN t.type = 'income' THEN t.to_account_id ELSE t.from_account_id END
+WHERE t.category_id IS NOT NULL
+    AND t.type IN ('income', 'expense')
+    AND t.occurred_on < $1
+ORDER BY t.occurred_on, t.id
+`
+
+type ListCategorizedForBudgetRow struct {
+	CategoryID pgtype.Int8
+	Type       string
+	OccurredOn time.Time
+	Amount     decimal.Decimal
+	Currency   string
+}
+
+// Categorized income/expense transactions with occurred_on before an exclusive
+// upper bound (the first day of the month after the selected one), for the budget
+// view's actuals + carryover chain (Story 8.2 / FR-18). The native magnitude and
+// currency come from the money side of the row: income credits to_account,
+// expense debits from_account. The `type IN ('income','expense')` whitelist is the
+// guard that scopes this to budget spending: transfers and investment trades
+// (buy/sell/dividend) share this same transaction table under other type values
+// (migration 00010, AD-9), and the whitelist excludes them — do NOT loosen it to
+// `type != 'transfer'` or trades would leak into actuals. Ordered by date so the
+// domain sees a stable sequence.
+func (q *Queries) ListCategorizedForBudget(ctx context.Context, occurredOn time.Time) ([]ListCategorizedForBudgetRow, error) {
+	rows, err := q.db.Query(ctx, listCategorizedForBudget, occurredOn)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCategorizedForBudgetRow{}
+	for rows.Next() {
+		var i ListCategorizedForBudgetRow
+		if err := rows.Scan(
+			&i.CategoryID,
+			&i.Type,
+			&i.OccurredOn,
+			&i.Amount,
+			&i.Currency,
 		); err != nil {
 			return nil, err
 		}

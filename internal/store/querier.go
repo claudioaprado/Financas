@@ -62,6 +62,17 @@ type Querier interface {
 	ListAllAccounts(ctx context.Context) ([]Account, error)
 	ListBudgets(ctx context.Context) ([]ListBudgetsRow, error)
 	ListCategories(ctx context.Context) ([]Category, error)
+	// Categorized income/expense transactions with occurred_on before an exclusive
+	// upper bound (the first day of the month after the selected one), for the budget
+	// view's actuals + carryover chain (Story 8.2 / FR-18). The native magnitude and
+	// currency come from the money side of the row: income credits to_account,
+	// expense debits from_account. The `type IN ('income','expense')` whitelist is the
+	// guard that scopes this to budget spending: transfers and investment trades
+	// (buy/sell/dividend) share this same transaction table under other type values
+	// (migration 00010, AD-9), and the whitelist excludes them — do NOT loosen it to
+	// `type != 'transfer'` or trades would leak into actuals. Ordered by date so the
+	// domain sees a stable sequence.
+	ListCategorizedForBudget(ctx context.Context, occurredOn time.Time) ([]ListCategorizedForBudgetRow, error)
 	ListCategoryRules(ctx context.Context) ([]ListCategoryRulesRow, error)
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)

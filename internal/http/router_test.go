@@ -17,6 +17,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/shopspring/decimal"
 
+	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/backup"
@@ -537,17 +538,28 @@ func (s *stubCategoryRules) Delete(_ context.Context, id int64) error {
 	return categoryrule.ErrNotFound
 }
 
-// stubBudgets is an in-memory Budgets for handler tests.
+// stubBudgets is an in-memory Budgets for handler tests. Report projects each
+// stored target into a trivial line (no carryover, zero actual) in BRL — enough
+// to exercise the page's rendering and management flow.
 type stubBudgets struct {
-	budgets []budget.Budget
-	listErr error
+	budgets   []budget.Budget
+	reportErr error
 }
 
-func (s *stubBudgets) List(_ context.Context) ([]budget.Budget, error) {
-	if s.listErr != nil {
-		return nil, s.listErr
+func (s *stubBudgets) Report(_ context.Context, _ int, _ time.Month) (domain.BudgetReport, error) {
+	if s.reportErr != nil {
+		return domain.BudgetReport{}, s.reportErr
 	}
-	return s.budgets, nil
+	zero := money.New(decimal.Zero, money.BRL)
+	var lines []domain.BudgetLine
+	for _, b := range s.budgets {
+		amt := money.New(b.Amount, money.BRL)
+		lines = append(lines, domain.BudgetLine{
+			CategoryID: b.CategoryID, Name: b.CategoryName, Kind: b.Kind,
+			Target: amt, Carryover: zero, Planned: amt, Actual: zero, Remaining: amt,
+		})
+	}
+	return domain.BudgetReport{Lines: lines}, nil
 }
 
 func (s *stubBudgets) Set(_ context.Context, categoryID int64, amount decimal.Decimal) error {
@@ -2220,28 +2232,35 @@ func TestBudgetsPage(t *testing.T) {
 		t.Fatalf("unauth budgets = %d, want 303", recUnauth.Code)
 	}
 
-	// Page renders with the heading and the currency hint.
+	// Page renders with the heading and the planned/actual/remaining view columns.
 	recForm := httptest.NewRecorder()
 	router.ServeHTTP(recForm, withCookie(httptest.NewRequest(http.MethodGet, "/budgets", nil), cookie))
-	if recForm.Code != http.StatusOK || !strings.Contains(recForm.Body.String(), "Orçamento mensal") {
-		t.Fatalf("budgets page = %d, missing heading", recForm.Code)
+	body := recForm.Body.String()
+	if recForm.Code != http.StatusOK || !strings.Contains(body, "Orçamento mensal") ||
+		!strings.Contains(body, "Planejado") || !strings.Contains(body, "Realizado") || !strings.Contains(body, "Restante") {
+		t.Fatalf("budgets page = %d, missing heading/columns", recForm.Code)
 	}
 
-	// Set a target using a Brazilian-format amount.
+	// Set a target using a Brazilian-format amount; the month is preserved on the
+	// post-write redirect.
 	recSet := httptest.NewRecorder()
-	set := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader("category_id=1&amount=1.234,56"))
+	set := httptest.NewRequest(http.MethodPost, "/budgets", strings.NewReader("category_id=1&amount=1.234,56&month=2026-06"))
 	set.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	router.ServeHTTP(recSet, withCookie(set, cookie))
 	if recSet.Code != http.StatusSeeOther || len(budgets.budgets) != 1 ||
 		!budgets.budgets[0].Amount.Equal(decimal.RequireFromString("1234.56")) {
 		t.Fatalf("set budget = %d, budgets = %+v", recSet.Code, budgets.budgets)
 	}
+	if loc := recSet.Header().Get("Location"); loc != "/budgets?month=2026-06" {
+		t.Fatalf("set redirect = %q, want /budgets?month=2026-06", loc)
+	}
 
-	// The list renders the target formatted in the Display Currency.
+	// The view renders the target formatted in the Display Currency, for the month
+	// carried in the query string.
 	recList := httptest.NewRecorder()
-	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/budgets", nil), cookie))
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/budgets?month=2026-06", nil), cookie))
 	if !strings.Contains(recList.Body.String(), "1.234,56 BRL") {
-		t.Fatalf("budgets list missing formatted target:\n%s", recList.Body.String())
+		t.Fatalf("budgets view missing formatted target:\n%s", recList.Body.String())
 	}
 
 	// A non-positive amount is rejected (400) and does not change the store.

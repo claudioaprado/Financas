@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +122,7 @@ type CategoryRules interface {
 // Budgets sets, lists, and deletes monthly category budget targets (Story 8.1 /
 // FR-18). Defined here (consumer side) and implemented by service/budget.
 type Budgets interface {
-	List(ctx context.Context) ([]budget.Budget, error)
+	Report(ctx context.Context, year int, month time.Month) (domain.BudgetReport, error)
 	Set(ctx context.Context, categoryID int64, amount decimal.Decimal) error
 	Delete(ctx context.Context, categoryID int64) error
 }
@@ -1239,7 +1240,7 @@ func budgetsSet(deps Deps) http.HandlerFunc {
 			renderBudgets(deps, w, req, problemMsg(req, "Não foi possível salvar o orçamento. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
-		http.Redirect(w, req, "/budgets", http.StatusSeeOther)
+		http.Redirect(w, req, budgetsRedirect(req), http.StatusSeeOther)
 	}
 }
 
@@ -1258,15 +1259,35 @@ func budgetsDelete(deps Deps) http.HandlerFunc {
 			renderBudgets(deps, w, req, problemMsg(req, "Não foi possível remover o orçamento. Tente novamente.", err), http.StatusBadRequest)
 			return
 		}
-		http.Redirect(w, req, "/budgets", http.StatusSeeOther)
+		http.Redirect(w, req, budgetsRedirect(req), http.StatusSeeOther)
 	}
 }
 
+// budgetsRedirect keeps the owner on the month they were editing after a write.
+func budgetsRedirect(req *http.Request) string {
+	if m := req.PostFormValue("month"); m != "" {
+		return "/budgets?month=" + url.QueryEscape(m)
+	}
+	return "/budgets"
+}
+
+// selectedBudgetMonth reads ?month=YYYY-MM (query or form), defaulting to the
+// current month when absent or malformed.
+func selectedBudgetMonth(req *http.Request) (int, time.Month, string) {
+	if v := req.FormValue("month"); v != "" {
+		if t, err := time.Parse("2006-01", v); err == nil {
+			return t.Year(), t.Month(), v
+		}
+	}
+	now := time.Now().UTC()
+	return now.Year(), now.Month(), now.Format("2006-01")
+}
+
 func renderBudgets(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
-	// The target is stored as a bare decimal interpreted in the Display Currency;
-	// render it in that currency. A currency-load failure is a load failure — and
-	// without the currency we must not format rows (they would render a blank
-	// code), so the budget list is left empty behind the error banner.
+	year, month, monthValue := selectedBudgetMonth(req)
+
+	// The Display Currency labels the form and drives the report; a load failure
+	// here is a load failure and we must not render figures with a blank code.
 	cur, err := deps.Settings.DisplayCurrency(req.Context())
 	if err != nil {
 		logLoad(req, "budgets display currency", err)
@@ -1281,25 +1302,43 @@ func renderBudgets(deps Deps, w http.ResponseWriter, req *http.Request, errMsg s
 			cats = append(cats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
 		}
 	}
-	var budgets []web.BudgetRow
+	var rows []web.BudgetViewRow
+	var notice string
 	if cur != "" {
-		if bs, err := deps.Budgets.List(req.Context()); err != nil {
-			logLoad(req, "budgets list", err)
+		if rep, err := deps.Budgets.Report(req.Context(), year, month); err != nil {
+			logLoad(req, "budgets report", err)
 			errMsg, code = loadErrorMsg, http.StatusInternalServerError
 		} else {
-			for _, b := range bs {
-				budgets = append(budgets, web.BudgetRow{
-					CategoryID:   b.CategoryID,
-					CategoryName: b.CategoryName,
-					Kind:         b.Kind,
-					Target:       money.New(b.Amount, cur).Display(),
+			for _, l := range rep.Lines {
+				// Favorable: an expense on or under budget (remaining ≥ 0), or an
+				// income that met or beat its target (remaining ≤ 0). A dead-on
+				// zero remaining is favorable for either kind.
+				sign := l.Remaining.Amount().Sign()
+				favorable := (l.Kind == "expense" && sign >= 0) || (l.Kind == "income" && sign <= 0)
+				rows = append(rows, web.BudgetViewRow{
+					CategoryID: l.CategoryID,
+					Name:       l.Name,
+					Kind:       l.Kind,
+					Target:     l.Target.Display(),
+					Carryover:  l.Carryover.Display(),
+					Planned:    l.Planned.Display(),
+					Actual:     l.Actual.Display(),
+					Remaining:  l.Remaining.Display(),
+					Favorable:  favorable,
 				})
+			}
+			if len(rep.Missing) > 0 {
+				codes := make([]string, len(rep.Missing))
+				for i, c := range rep.Missing {
+					codes[i] = string(c)
+				}
+				notice = "Total parcial: sem cotação para " + strings.Join(codes, ", ") + " em algumas datas."
 			}
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.BudgetsPage(shellData(deps, req.Context(), "settings"), cats, budgets, string(cur), errMsg).Render(req.Context(), w)
+	_ = web.BudgetsPage(shellData(deps, req.Context(), "settings"), monthValue, string(cur), cats, rows, notice, errMsg).Render(req.Context(), w)
 }
 
 func categorySummary(deps Deps) http.HandlerFunc {

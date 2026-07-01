@@ -11,6 +11,16 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // countLabel renders a usage count for display.
 func countLabel(n int64) string { return strconv.FormatInt(n, 10) }
 
+// budgetRemainingClass colours a budget row's Remaining: green when the standing
+// is favorable (computed by the caller — on/under an expense budget, or meeting/
+// beating an income target), red otherwise.
+func budgetRemainingClass(favorable bool) string {
+	if favorable {
+		return "text-gain"
+	}
+	return "text-loss"
+}
+
 // BadgeVariant selects a Badge's semantic colour (Story 5.1, UX-DR7 palette).
 type BadgeVariant string
 
@@ -390,13 +400,20 @@ type RuleRow struct {
 	Kind         string // "income" | "expense"
 }
 
-// BudgetRow is one category's monthly target on the budgets page (Story 8.1),
-// with the target pre-formatted in the Display Currency.
-type BudgetRow struct {
-	CategoryID   int64
-	CategoryName string
-	Kind         string // "income" | "expense"
-	Target       string // formatted money, e.g. "500,00 BRL"
+// BudgetViewRow is one budgeted category's standing for the selected month on the
+// budgets page (Story 8.2) — every figure pre-formatted in the Display Currency.
+// Favorable is set by the handler per kind (an expense on/under budget, or an
+// income meeting/beating its target) and drives the Remaining colour.
+type BudgetViewRow struct {
+	CategoryID int64
+	Name       string
+	Kind       string // "income" | "expense"
+	Target     string
+	Carryover  string
+	Planned    string
+	Actual     string
+	Remaining  string
+	Favorable  bool
 }
 
 // SecurityTypeOption is one security-type choice in the create form (value is

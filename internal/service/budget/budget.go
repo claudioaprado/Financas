@@ -13,12 +13,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/shopspring/decimal"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/claudioaprado/financas/internal/domain"
+	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -90,6 +94,85 @@ func (s *Service) List(ctx context.Context) ([]Budget, error) {
 		out[i] = Budget{CategoryID: r.CategoryID, CategoryName: r.CategoryName, Kind: r.CategoryKind, Amount: r.Amount}
 	}
 	return out, nil
+}
+
+// Report derives the planned×actual×remaining budget view with rollover for the
+// selected month (AD-2/AD-10) — nothing here is stored. It gathers the authored
+// inputs (Display Currency, the per-category targets, and every categorized
+// income/expense transaction up to the end of the selected month), resolves each
+// transaction's native→Display effective rate on its own date (convert-then-sum,
+// AD-12; a missing rate yields a partial total, AD-6), and hands them to the
+// canonical domain.Budget function. Reads on the pool (no write ⇒ no tx).
+func (s *Service) Report(ctx context.Context, year int, month time.Month) (domain.BudgetReport, error) {
+	q := store.New(s.pool)
+
+	code, err := q.GetDisplayCurrency(ctx)
+	if err != nil {
+		return domain.BudgetReport{}, fmt.Errorf("budget: display currency: %w", err)
+	}
+	display := money.Currency(code)
+
+	brows, err := q.ListBudgets(ctx)
+	if err != nil {
+		return domain.BudgetReport{}, fmt.Errorf("budget: list targets: %w", err)
+	}
+	targets := make([]domain.BudgetTarget, len(brows))
+	for i, b := range brows {
+		targets[i] = domain.BudgetTarget{CategoryID: b.CategoryID, Name: b.CategoryName, Kind: b.CategoryKind, Amount: b.Amount}
+	}
+
+	// Exclusive upper bound: the first day of the month after the selected one, so
+	// every day of the selected month (and all prior months) is included.
+	upper := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
+	rows, err := q.ListCategorizedForBudget(ctx, upper)
+	if err != nil {
+		return domain.BudgetReport{}, fmt.Errorf("budget: list categorized: %w", err)
+	}
+
+	// Cache resolved rates per (currency, date) — a month of a statement shares
+	// dates, so this avoids re-querying the same effective rate repeatedly.
+	type rateKey struct {
+		cur  money.Currency
+		date time.Time
+	}
+	rateCache := map[rateKey]struct {
+		rate decimal.Decimal
+		ok   bool
+	}{}
+
+	txns := make([]domain.BudgetTxn, 0, len(rows))
+	for _, r := range rows {
+		cur := money.Currency(r.Currency)
+		bt := domain.BudgetTxn{
+			CategoryID: r.CategoryID.Int64,
+			Year:       r.OccurredOn.Year(),
+			Month:      r.OccurredOn.Month(),
+			Amount:     money.New(r.Amount, cur),
+		}
+		if cur == display {
+			bt.HasRate = true // same currency ⇒ no conversion; domain uses the amount as-is
+		} else {
+			key := rateKey{cur: cur, date: r.OccurredOn}
+			cached, seen := rateCache[key]
+			if !seen {
+				rate, rErr := q.RateEffectiveAt(ctx, store.RateEffectiveAtParams{
+					FromCurrency:  string(cur),
+					ToCurrency:    string(display),
+					EffectiveDate: r.OccurredOn,
+				})
+				cached.ok = rErr == nil
+				cached.rate = rate
+				if rErr != nil && !errors.Is(rErr, pgx.ErrNoRows) {
+					return domain.BudgetReport{}, fmt.Errorf("budget: effective rate: %w", rErr)
+				}
+				rateCache[key] = cached
+			}
+			bt.Rate, bt.HasRate = cached.rate, cached.ok
+		}
+		txns = append(txns, bt)
+	}
+
+	return domain.Budget(display, year, month, targets, txns), nil
 }
 
 // Delete removes a category's budget target (one transaction). Returns

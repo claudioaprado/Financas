@@ -11,7 +11,12 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/claudioaprado/financas/db"
+	"github.com/claudioaprado/financas/internal/money"
+	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/category"
+	"github.com/claudioaprado/financas/internal/service/exchangerate"
+	"github.com/claudioaprado/financas/internal/service/settings"
+	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/store"
 )
 
@@ -117,4 +122,163 @@ func TestBudgetCRUD(t *testing.T) {
 	// Clean up this run's categories (cascades the remaining budget away).
 	_ = cats.Delete(ctx, food.ID, true)
 	_ = cats.Delete(ctx, pay.ID, true)
+}
+
+func TestBudgetReport(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	cats := category.New(pool)
+	accts := account.New(pool)
+	txns := transaction.New(pool)
+	rates := exchangerate.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	// A USD→BRL rate of 5, effective before the transactions we date.
+	if _, err := rates.Add(ctx, money.USD, money.BRL, date(2026, 1, 1), decimal.RequireFromString("5")); err != nil {
+		t.Fatalf("add rate: %v", err)
+	}
+
+	brlAcct, err := accts.Create(ctx, fmt.Sprintf("BRL-%d", run), account.Cash, money.BRL)
+	if err != nil {
+		t.Fatalf("create BRL account: %v", err)
+	}
+	usdAcct, err := accts.Create(ctx, fmt.Sprintf("USD-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create USD account: %v", err)
+	}
+	food, err := cats.Create(ctx, fmt.Sprintf("Food-%d", run), category.Expense)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+
+	// May: 80 BRL Food. June: 100 BRL + 20 USD (→100 BRL) Food ⇒ actual 200.
+	rec := func(acct int64, amount string, d time.Time) {
+		if _, err := txns.Record(ctx, acct, transaction.Expense, decimal.RequireFromString(amount), d, "t", food.ID); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+	}
+	rec(brlAcct.ID, "80", date(2026, 5, 10))
+	rec(brlAcct.ID, "100", date(2026, 6, 12))
+	rec(usdAcct.ID, "20", date(2026, 6, 20))
+
+	// Target 300. June carryover = (300 − 80) = 220 ⇒ planned 520; actual 200 ⇒
+	// remaining 320.
+	if err := svc.Set(ctx, food.ID, decimal.RequireFromString("300")); err != nil {
+		t.Fatalf("set target: %v", err)
+	}
+
+	rep, err := svc.Report(ctx, 2026, time.June)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	found := false
+	for _, l := range rep.Lines {
+		if l.CategoryID != food.ID {
+			continue
+		}
+		found = true
+		if l.Target.String() != "300.0000 BRL" || l.Carryover.String() != "220.0000 BRL" ||
+			l.Planned.String() != "520.0000 BRL" || l.Actual.String() != "200.0000 BRL" ||
+			l.Remaining.String() != "320.0000 BRL" {
+			t.Fatalf("Food line = %+v", l)
+		}
+	}
+	if !found {
+		t.Fatalf("no line for Food in report %+v", rep.Lines)
+	}
+	if len(rep.Missing) != 0 {
+		t.Fatalf("Missing = %v, want empty", rep.Missing)
+	}
+
+	_ = cats.Delete(ctx, food.ID, true)
+}
+
+// TestBudgetReportMissingRate exercises the AD-6 partial-total path end to end: a
+// transaction in a currency with no effective rate on its date is excluded from
+// the actual and its currency surfaced in Missing (never guessed). The txn is
+// dated in 1990 so no rate any other test seeds (all modern) can cover it.
+func TestBudgetReportMissingRate(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	cats := category.New(pool)
+	accts := account.New(pool)
+	txns := transaction.New(pool)
+	set := settings.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
+		t.Fatalf("set display currency: %v", err)
+	}
+	usdAcct, err := accts.Create(ctx, fmt.Sprintf("USDm-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create USD account: %v", err)
+	}
+	food, err := cats.Create(ctx, fmt.Sprintf("Foodm-%d", run), category.Expense)
+	if err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	if _, err := txns.Record(ctx, usdAcct.ID, transaction.Expense, decimal.RequireFromString("20"), date(1990, 6, 15), "t", food.ID); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := svc.Set(ctx, food.ID, decimal.RequireFromString("300")); err != nil {
+		t.Fatalf("set target: %v", err)
+	}
+
+	rep, err := svc.Report(ctx, 1990, time.June)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	found := false
+	for _, l := range rep.Lines {
+		if l.CategoryID != food.ID {
+			continue
+		}
+		found = true
+		// The unrated USD spend is excluded ⇒ actual 0, remaining equals target.
+		if l.Actual.String() != "0.0000 BRL" || l.Remaining.String() != "300.0000 BRL" {
+			t.Fatalf("Food line = %+v", l)
+		}
+	}
+	if !found {
+		t.Fatalf("no line for Food in report %+v", rep.Lines)
+	}
+	missingUSD := false
+	for _, c := range rep.Missing {
+		if c == money.USD {
+			missingUSD = true
+		}
+	}
+	if !missingUSD {
+		t.Fatalf("Missing = %v, want it to contain USD", rep.Missing)
+	}
+
+	_ = cats.Delete(ctx, food.ID, true)
+}
+
+func date(y int, m time.Month, d int) time.Time {
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
