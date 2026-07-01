@@ -17,7 +17,7 @@ func AccountsListHref(selectedType string, showArchived bool) string {
 		q.Set("show", "archived")
 	}
 	if selectedType != "" {
-		q.Set("type", selectedType)
+		q.Set("ftype", selectedType)
 	}
 	if len(q) == 0 {
 		return "/accounts"

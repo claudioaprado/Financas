@@ -1717,6 +1717,54 @@ func TestAccountsInvalidCreate(t *testing.T) {
 	}
 }
 
+func TestAccountsCreateWithInitialBalance(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		return rec
+	}
+
+	// A cash account with an opening balance records it as a derived balance.
+	if rec := post("name=Poupança&type=cash&currency=USD&initial_balance=250,50"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("cash + initial balance = %d, want 303", rec.Code)
+	}
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if !strings.Contains(recList.Body.String(), "250,50") {
+		t.Errorf("accounts list missing the opening balance 250,50")
+	}
+
+	// A credit account's opening balance is the amount owed (shown positive).
+	if rec := post("name=Cartão&type=credit&currency=USD&initial_balance=500"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("credit + initial balance = %d, want 303", rec.Code)
+	}
+	recList2 := httptest.NewRecorder()
+	router.ServeHTTP(recList2, withCookie(httptest.NewRequest(http.MethodGet, "/accounts", nil), cookie))
+	if body := recList2.Body.String(); !strings.Contains(body, "Saldo devedor") || !strings.Contains(body, "500,00") {
+		t.Errorf("credit account missing its owed opening balance 500,00")
+	}
+
+	// Investment accounts don't accept an opening balance (transfer-funded).
+	if rec := post("name=Corretora&type=investment&currency=USD&initial_balance=100"); rec.Code != http.StatusBadRequest {
+		t.Errorf("investment + initial balance = %d, want 400", rec.Code)
+	}
+	// A malformed opening balance is rejected.
+	if rec := post("name=Bad&type=cash&currency=USD&initial_balance=abc"); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid initial balance = %d, want 400", rec.Code)
+	}
+	// Omitting the opening balance still creates the account (back-compat).
+	if rec := post("name=Semliquido&type=cash&currency=USD"); rec.Code != http.StatusSeeOther {
+		t.Errorf("no initial balance = %d, want 303", rec.Code)
+	}
+}
+
 func TestAccountDetailRequiresAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	NewRouter(testDeps(false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/accounts/1", nil))

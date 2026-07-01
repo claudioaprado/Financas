@@ -601,8 +601,13 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 						}
 					</select>
 				</div>
+				<div class="flex flex-col gap-1">
+					<label class="text-xs text-muted" for="initial_balance">Saldo inicial (opcional)</label>
+					<input id="initial_balance" name="initial_balance" inputmode="decimal" placeholder="0,00" class="w-32 rounded border px-3 py-2 tabular-nums"/>
+				</div>
 				<button class="rounded bg-slate-900 px-4 py-2 text-white" type="submit">Criar conta</button>
 			</form>
+			<p class="mt-2 text-xs text-muted">O saldo inicial cria um lançamento de abertura com a data de hoje (contas de caixa ou crédito). Contas de investimento são abastecidas por transferências.</p>
 			<div class="mt-8 flex flex-wrap items-end justify-between gap-4">
 				<form method="get" action="/accounts" class="flex flex-wrap items-end gap-3">
 					if showArchived {
@@ -610,7 +615,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 					}
 					<div class="flex flex-col gap-1">
 						<label class="text-xs text-muted" for="filter-type">Filtrar por tipo</label>
-						<select id="filter-type" name="type" onchange="this.form.submit()" class="rounded border px-3 py-2">
+						<select id="filter-type" name="ftype" onchange="this.form.submit()" class="rounded border px-3 py-2">
 							<option value="" selected?={ selectedType == "" }>Todos os tipos</option>
 							for _, t := range types {
 								<option value={ t } selected?={ selectedType == t }>{ AccountTypeName(t) }</option>
@@ -662,7 +667,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 												<input type="hidden" name="show" value="archived"/>
 											}
 											if selectedType != "" {
-												<input type="hidden" name="type" value={ selectedType }/>
+												<input type="hidden" name="ftype" value={ selectedType }/>
 											}
 											<input name="name" value={ a.Name } required class="w-36 rounded border px-3 py-1.5"/>
 											<button class="rounded border px-3 py-1.5" type="submit">Renomear</button>
@@ -673,7 +678,7 @@ templ AccountsPage(data ShellData, accounts []AccountRow, types []string, curren
 												<input type="hidden" name="show" value="archived"/>
 											}
 											if selectedType != "" {
-												<input type="hidden" name="type" value={ selectedType }/>
+												<input type="hidden" name="ftype" value={ selectedType }/>
 											}
 											if a.Archived {
 												<input type="hidden" name="archived" value="false"/>

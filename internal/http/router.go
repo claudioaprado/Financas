@@ -625,9 +625,45 @@ func accountsCreate(deps Deps) http.HandlerFunc {
 		name := req.PostFormValue("name")
 		typ := account.AccountType(req.PostFormValue("type"))
 		currency := money.Currency(req.PostFormValue("currency"))
-		if _, err := deps.Accounts.Create(req.Context(), name, typ, currency); err != nil {
+
+		// Optional opening balance becomes a dated opening ledger entry — balances
+		// are derived from the ledger, never stored (AD-2). Validate the input
+		// BEFORE creating the account so a bad value can't leave a fresh account
+		// without its opening entry.
+		openRaw := strings.TrimSpace(req.PostFormValue("initial_balance"))
+		var openAmt decimal.Decimal
+		if openRaw != "" {
+			amt, perr := money.ParseDecimal(openRaw)
+			if perr != nil || !amt.IsPositive() {
+				renderAccounts(deps, w, req, false, "Informe um saldo inicial válido (maior que zero).", http.StatusBadRequest)
+				return
+			}
+			if typ == account.Investment {
+				renderAccounts(deps, w, req, false, "Contas de investimento são abastecidas por transferências e não aceitam saldo inicial.", http.StatusBadRequest)
+				return
+			}
+			openAmt = amt
+		}
+
+		acct, err := deps.Accounts.Create(req.Context(), name, typ, currency)
+		if err != nil {
 			renderAccounts(deps, w, req, false, problemMsg(req, "Não foi possível criar a conta. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
 			return
+		}
+		if openAmt.IsPositive() {
+			// cash/investment credit via income; a credit account's opening balance
+			// is the amount already owed, recorded as an expense (which increases owed).
+			openType := transaction.Income
+			if typ == account.Credit {
+				openType = transaction.Expense
+			}
+			if _, err := deps.Transactions.Record(req.Context(), acct.ID, openType, openAmt, time.Now(), "Saldo inicial", 0); err != nil {
+				// The account was created but the opening entry failed (e.g. a transient
+				// DB error). Surface it — the owner can add an opening entry by hand.
+				logLoad(req, "opening balance", err)
+				renderAccounts(deps, w, req, false, "A conta foi criada, mas não foi possível registrar o saldo inicial. Adicione um lançamento de abertura manualmente.", http.StatusOK)
+				return
+			}
 		}
 		http.Redirect(w, req, "/accounts", http.StatusSeeOther)
 	}
@@ -685,7 +721,7 @@ func accountsRedirect(req *http.Request) string {
 		q.Set("show", "archived")
 	}
 	if t := accountTypeFilter(req); t != "" {
-		q.Set("type", t)
+		q.Set("ftype", t)
 	}
 	if len(q) == 0 {
 		return "/accounts"
@@ -702,12 +738,14 @@ func balanceLabel(t account.AccountType) string {
 	return "Saldo em caixa"
 }
 
-// accountTypeFilter reads the optional account-type filter from "?type=…" (GET)
-// or a "type" form field (POST). An empty or unknown value means "all types".
+// accountTypeFilter reads the optional account-type filter from "?ftype=…" (GET)
+// or an "ftype" form field (POST). The param is deliberately NOT "type" so it
+// can't collide with the create form's account-type field. An empty or unknown
+// value means "all types".
 func accountTypeFilter(req *http.Request) string {
-	t := req.URL.Query().Get("type")
+	t := req.URL.Query().Get("ftype")
 	if t == "" {
-		t = req.PostFormValue("type")
+		t = req.PostFormValue("ftype")
 	}
 	switch account.AccountType(t) {
 	case account.Cash, account.Credit, account.Investment:
