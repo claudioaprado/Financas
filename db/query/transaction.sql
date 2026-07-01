@@ -42,3 +42,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 SELECT fitid
 FROM transaction
 WHERE fitid IS NOT NULL AND (from_account_id = $1 OR to_account_id = $1);
+
+-- name: ListTransactionKindsByIDs :many
+-- The (id, type) of the given transactions, for validating a bulk-categorize
+-- selection (Story 10.1): every selected row must exist and be income/expense of
+-- the category's kind. Transfers/trades are returned with their type so the
+-- service can reject them (they are not categorizable, AD-9).
+SELECT id, type FROM transaction WHERE id = ANY($1::bigint[]);
+
+-- name: BulkSetCategory :execrows
+-- Assign one category to many transactions in a single statement (Story 10.1,
+-- one tx AD-3). The type guard scopes the write to rows matching the category's
+-- kind, so a transfer/trade id can never be categorized even if submitted.
+UPDATE transaction SET category_id = $1 WHERE id = ANY($2::bigint[]) AND type = $3;

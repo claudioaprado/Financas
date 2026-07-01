@@ -13,6 +13,27 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const bulkSetCategory = `-- name: BulkSetCategory :execrows
+UPDATE transaction SET category_id = $1 WHERE id = ANY($2::bigint[]) AND type = $3
+`
+
+type BulkSetCategoryParams struct {
+	CategoryID pgtype.Int8
+	Column2    []int64
+	Type       string
+}
+
+// Assign one category to many transactions in a single statement (Story 10.1,
+// one tx AD-3). The type guard scopes the write to rows matching the category's
+// kind, so a transfer/trade id can never be categorized even if submitted.
+func (q *Queries) BulkSetCategory(ctx context.Context, arg BulkSetCategoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bulkSetCategory, arg.CategoryID, arg.Column2, arg.Type)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createImportedTransaction = `-- name: CreateImportedTransaction :execrows
 INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, import_hash, category_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -242,6 +263,39 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 			&i.Fees,
 			&i.Fitid,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTransactionKindsByIDs = `-- name: ListTransactionKindsByIDs :many
+SELECT id, type FROM transaction WHERE id = ANY($1::bigint[])
+`
+
+type ListTransactionKindsByIDsRow struct {
+	ID   int64
+	Type string
+}
+
+// The (id, type) of the given transactions, for validating a bulk-categorize
+// selection (Story 10.1): every selected row must exist and be income/expense of
+// the category's kind. Transfers/trades are returned with their type so the
+// service can reject them (they are not categorizable, AD-9).
+func (q *Queries) ListTransactionKindsByIDs(ctx context.Context, dollar_1 []int64) ([]ListTransactionKindsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listTransactionKindsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTransactionKindsByIDsRow{}
+	for rows.Next() {
+		var i ListTransactionKindsByIDsRow
+		if err := rows.Scan(&i.ID, &i.Type); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

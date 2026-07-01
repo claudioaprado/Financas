@@ -78,6 +78,8 @@ var (
 	// ErrOversold rejects a Sell whose security would go negative at any
 	// chronological point (the per-security oversell guard).
 	ErrOversold = errors.New("transaction: sell exceeds holdings")
+	// ErrNoSelection is returned when a bulk operation receives no rows.
+	ErrNoSelection = errors.New("transaction: no rows selected")
 )
 
 // Transaction is one row formatted for a specific account's register. Amount is
@@ -767,6 +769,77 @@ func (s *Service) CategoryTransactions(ctx context.Context, categoryID int64) ([
 	return out, domain.SumByCurrency(amounts), nil
 }
 
+// BulkCategorize assigns one category to many transactions at once (Story 10.1 /
+// FR-21) in a single DB transaction (AD-3). It reuses the register's read seam
+// and honors the category kind rule: every selected row must exist and be an
+// income/expense of the category's kind — transfers and trades are not
+// categorizable (AD-9), so a mixed or wrong-kind selection is rejected whole
+// (ErrCategoryKindMismatch) rather than silently partly-applied. Returns the
+// number of rows updated. No financial math changes (AD-10) — only category_id.
+func (s *Service) BulkCategorize(ctx context.Context, ids []int64, categoryID int64) (int, error) {
+	if categoryID == 0 {
+		return 0, ErrCategoryNotFound
+	}
+	uniq := dedupeIDs(ids)
+	if len(uniq) == 0 {
+		return 0, ErrNoSelection
+	}
+
+	cat, err := store.New(s.pool).GetCategory(ctx, categoryID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrCategoryNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("transaction: get category: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := store.New(tx)
+
+	kinds, err := q.ListTransactionKindsByIDs(ctx, uniq)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: list kinds: %w", err)
+	}
+	if len(kinds) != len(uniq) {
+		return 0, ErrTxNotFound // a selected id does not exist
+	}
+	for _, r := range kinds {
+		if r.Type != cat.Kind { // wrong-kind income/expense, or a transfer/trade
+			return 0, ErrCategoryKindMismatch
+		}
+	}
+
+	n, err := q.BulkSetCategory(ctx, store.BulkSetCategoryParams{
+		CategoryID: idParam(categoryID),
+		Column2:    uniq,
+		Type:       cat.Kind,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("transaction: bulk set category: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("transaction: commit: %w", err)
+	}
+	return int(n), nil
+}
+
+// dedupeIDs drops zero and duplicate ids, preserving first-seen order.
+func dedupeIDs(ids []int64) []int64 {
+	seen := make(map[int64]bool, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id != 0 && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // validate checks the account exists and is a cash account, and that the type
 // and amount are valid.
 func (s *Service) validate(ctx context.Context, accountID int64, typ TxType, amount decimal.Decimal) error {
@@ -827,6 +900,7 @@ type RegisterRow struct {
 	Incoming      bool
 	IsTransfer    bool
 	CrossCurrency bool
+	Editable      bool // income/expense (categorizable/bulk-selectable); false for transfers/trades
 }
 
 // Register returns the ledger newest-first, narrowed by the filter and enriched
@@ -878,6 +952,7 @@ func (s *Service) Register(ctx context.Context, f RegisterFilter) ([]RegisterRow
 			Description: r.Description,
 			Category:    catNames[catID],
 			Security:    secNames[secID],
+			Editable:    typ == Income || typ == Expense,
 		}
 		switch typ {
 		case Income, Sell, Dividend:

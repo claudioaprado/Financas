@@ -174,9 +174,11 @@ type stubTransactions struct {
 	rows        []transaction.Transaction
 	nextID      int64
 	held        map[int64]*stubHolding // by security id
-	listErr     error
-	registerErr error
-	oversold    []string // symbols returned as inconsistent (oversold) by Holdings
+	listErr      error
+	registerErr  error
+	oversold     []string // symbols returned as inconsistent (oversold) by Holdings
+	bulkIDs      []int64  // last BulkCategorize selection (Story 10.1)
+	bulkCategory int64    // last BulkCategorize target category
 }
 
 type stubHolding struct {
@@ -418,9 +420,30 @@ func (s *stubTransactions) Register(_ context.Context, f transaction.RegisterFil
 			Amount:      money.New(r.Amount, money.USD),
 			Incoming:    r.Incoming,
 			IsTransfer:  r.Type == transaction.Transfer,
+			Editable:    r.Type == transaction.Income || r.Type == transaction.Expense,
 		})
 	}
 	return out, nil
+}
+
+func (s *stubTransactions) BulkCategorize(_ context.Context, ids []int64, categoryID int64) (int, error) {
+	if categoryID == 0 {
+		return 0, transaction.ErrCategoryNotFound
+	}
+	if len(ids) == 0 {
+		return 0, transaction.ErrNoSelection
+	}
+	s.bulkIDs, s.bulkCategory = ids, categoryID
+	n := 0
+	for i := range s.rows {
+		for _, id := range ids {
+			if s.rows[i].ID == id {
+				s.rows[i].CategoryID = categoryID
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // stubCategories is an in-memory Categories for handler tests.
@@ -2174,6 +2197,61 @@ func TestTransactionsRegister(t *testing.T) {
 	body := recFil.Body.String()
 	if !strings.Contains(body, "wage") || strings.Contains(body, "food") {
 		t.Errorf("type=income filter should show wage and hide food; got %q", body)
+	}
+}
+
+// TestTransactionsBulkCategorize covers Story 10.1: the register shows a bulk
+// bar + per-row checkboxes, and posting a selection categorizes those rows and
+// redirects preserving filters; an empty selection re-renders with an error.
+func TestTransactionsBulkCategorize(t *testing.T) {
+	deps := testDeps(true, nil)
+	txns := &stubTransactions{}
+	deps.Transactions = txns
+	cats := &stubCategories{usage: map[int64]int64{}}
+	_, _ = cats.Create(context.Background(), "Food", category.Expense)
+	deps.Categories = cats
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	// Two expenses to select.
+	_, _ = txns.Record(context.Background(), 1, transaction.Expense, decimal.RequireFromString("10"), time.Now(), "a", 0)
+	_, _ = txns.Record(context.Background(), 1, transaction.Expense, decimal.RequireFromString("20"), time.Now(), "b", 0)
+
+	// The register renders the bulk bar and a row checkbox.
+	recPage := httptest.NewRecorder()
+	router.ServeHTTP(recPage, withCookie(httptest.NewRequest(http.MethodGet, "/transactions", nil), cookie))
+	page := recPage.Body.String()
+	if !strings.Contains(page, "Aplicar categoria") || !strings.Contains(page, `name="tx"`) {
+		t.Fatalf("register missing bulk bar/checkbox")
+	}
+
+	// Bulk-categorize both rows; redirect preserves the active type filter.
+	recBulk := httptest.NewRecorder()
+	bulk := httptest.NewRequest(http.MethodPost, "/transactions/bulk-categorize",
+		strings.NewReader("tx=1&tx=2&category_id=1&type=expense&account=0&category=0"))
+	bulk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recBulk, withCookie(bulk, cookie))
+	if recBulk.Code != http.StatusSeeOther {
+		t.Fatalf("bulk = %d, want 303", recBulk.Code)
+	}
+	if loc := recBulk.Header().Get("Location"); loc != "/transactions?type=expense" {
+		t.Fatalf("bulk redirect = %q, want /transactions?type=expense", loc)
+	}
+	if len(txns.bulkIDs) != 2 || txns.bulkCategory != 1 {
+		t.Fatalf("bulk recorded ids=%v cat=%d, want [1 2] 1", txns.bulkIDs, txns.bulkCategory)
+	}
+
+	// An empty selection re-renders the page with a 400 and the error banner.
+	recEmpty := httptest.NewRecorder()
+	empty := httptest.NewRequest(http.MethodPost, "/transactions/bulk-categorize",
+		strings.NewReader("category_id=1"))
+	empty.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recEmpty, withCookie(empty, cookie))
+	if recEmpty.Code != http.StatusBadRequest || !strings.Contains(recEmpty.Body.String(), "Selecione ao menos uma") {
+		t.Fatalf("empty bulk = %d, want 400 with message; body=%s", recEmpty.Code, recEmpty.Body.String())
 	}
 }
 

@@ -1439,11 +1439,14 @@ templ categorySelect(line int, kind string, incomeCats, expenseCats []CategoryOp
 // (account / type / category) and a newest-first list. The filter form is a
 // plain GET form (works without JS) enhanced with HTMX so changing a filter
 // swaps just the table body (#tx-rows) without a full reload (UX-DR5).
-templ TransactionsPage(data ShellData, accounts []FilterOption, categories []FilterOption, selAccount int64, selType string, selCategory int64, rows []RegisterRow) {
+templ TransactionsPage(data ShellData, v RegisterView) {
 	@Shell(data) {
 		<section class="rounded-card bg-white p-6 shadow-card">
 			<h1 class="text-2xl font-bold">Transações</h1>
 			<p class="mt-1 text-sm text-muted">Todas as contas, da mais recente para a mais antiga. Filtre para restringir a lista.</p>
+			if v.ErrMsg != "" {
+				<p class="mt-3 text-loss">{ v.ErrMsg }</p>
+			}
 			<form
 				method="get"
 				action="/transactions"
@@ -1456,46 +1459,63 @@ templ TransactionsPage(data ShellData, accounts []FilterOption, categories []Fil
 				<div>
 					<label class="block text-xs" for="account">Conta</label>
 					<select id="account" name="account" class="rounded border px-2 py-1">
-						<option value="" selected?={ selAccount == 0 }>Todas as contas</option>
-						for _, a := range accounts {
-							<option value={ accountID(a.ID) } selected?={ a.ID == selAccount }>{ a.Label }</option>
+						<option value="" selected?={ v.SelAccount == 0 }>Todas as contas</option>
+						for _, a := range v.Accounts {
+							<option value={ accountID(a.ID) } selected?={ a.ID == v.SelAccount }>{ a.Label }</option>
 						}
 					</select>
 				</div>
 				<div>
 					<label class="block text-xs" for="type">Tipo</label>
 					<select id="type" name="type" class="rounded border px-2 py-1">
-						<option value="" selected?={ selType == "" }>Todos os tipos</option>
-						<option value="income" selected?={ selType == "income" }>receita</option>
-						<option value="expense" selected?={ selType == "expense" }>despesa</option>
-						<option value="transfer" selected?={ selType == "transfer" }>transferência</option>
+						<option value="" selected?={ v.SelType == "" }>Todos os tipos</option>
+						<option value="income" selected?={ v.SelType == "income" }>receita</option>
+						<option value="expense" selected?={ v.SelType == "expense" }>despesa</option>
+						<option value="transfer" selected?={ v.SelType == "transfer" }>transferência</option>
 					</select>
 				</div>
 				<div>
 					<label class="block text-xs" for="category">Categoria</label>
 					<select id="category" name="category" class="rounded border px-2 py-1">
-						<option value="" selected?={ selCategory == 0 }>Todas as categorias</option>
-						for _, c := range categories {
-							<option value={ accountID(c.ID) } selected?={ c.ID == selCategory }>{ c.Label }</option>
+						<option value="" selected?={ v.SelCategory == 0 }>Todas as categorias</option>
+						for _, c := range v.Categories {
+							<option value={ accountID(c.ID) } selected?={ c.ID == v.SelCategory }>{ c.Label }</option>
 						}
 					</select>
 				</div>
 				<noscript><button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Filtrar</button></noscript>
 			</form>
-			<table class="mt-6 w-full text-sm">
-				<thead>
-					<tr class="text-left text-muted">
-						<th class="py-1">Data</th>
-						<th>Tipo</th>
-						<th>Conta</th>
-						<th>Descrição</th>
-						<th class="text-right">Valor</th>
-					</tr>
-				</thead>
-				<tbody id="tx-rows">
-					@TransactionRows(rows)
-				</tbody>
-			</table>
+			<form method="post" action="/transactions/bulk-categorize">
+				<input type="hidden" name="account" value={ accountID(v.SelAccount) }/>
+				<input type="hidden" name="type" value={ v.SelType }/>
+				<input type="hidden" name="category" value={ accountID(v.SelCategory) }/>
+				if len(v.BulkCats) > 0 {
+					<div class="mt-4 flex flex-wrap items-end gap-2 rounded-card bg-surface p-3">
+						<span class="text-xs text-muted">Categorizar selecionadas (receita/despesa):</span>
+						<select name="category_id" class="rounded border px-2 py-1 text-sm">
+							for _, c := range v.BulkCats {
+								<option value={ accountID(c.ID) }>{ c.Name } ({ c.Kind })</option>
+							}
+						</select>
+						<button class="rounded bg-slate-900 px-3 py-1.5 text-sm text-white" type="submit">Aplicar categoria</button>
+					</div>
+				}
+				<table class="mt-4 w-full text-sm">
+					<thead>
+						<tr class="text-left text-muted">
+							<th class="py-1 w-6"></th>
+							<th>Data</th>
+							<th>Tipo</th>
+							<th>Conta</th>
+							<th>Descrição</th>
+							<th class="text-right">Valor</th>
+						</tr>
+					</thead>
+					<tbody id="tx-rows">
+						@TransactionRows(v.Rows)
+					</tbody>
+				</table>
+			</form>
 		</section>
 	}
 }
@@ -1504,10 +1524,15 @@ templ TransactionsPage(data ShellData, accounts []FilterOption, categories []Fil
 // for HTMX filter swaps and embedded inside TransactionsPage's #tx-rows.
 templ TransactionRows(rows []RegisterRow) {
 	if len(rows) == 0 {
-		<tr><td colspan="5" class="py-2 text-muted">Nenhuma transação encontrada.</td></tr>
+		<tr><td colspan="6" class="py-2 text-muted">Nenhuma transação encontrada.</td></tr>
 	}
 	for _, r := range rows {
 		<tr class="border-t border-black/5">
+			<td class="py-1">
+				if r.Editable {
+					<input type="checkbox" name="tx" value={ accountID(r.ID) } aria-label="Selecionar"/>
+				}
+			</td>
 			<td class="py-1">{ r.Date }</td>
 			<td><span class="rounded bg-black/5 px-1 text-xs text-muted">{ r.Type }</span></td>
 			<td>{ r.Account }</td>

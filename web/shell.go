@@ -504,6 +504,22 @@ type RegisterRow struct {
 	Amount      string
 	Incoming    bool
 	IsTransfer  bool
+	Editable    bool // income/expense: shows a bulk-select checkbox (Story 10.1)
+}
+
+// RegisterView is the cross-account register page state (/transactions). It grows
+// with Epic 10: BulkCats drives the bulk-categorize picker (Story 10.1), Query is
+// the description/note search term (Story 10.3), ErrMsg banners a failed bulk op.
+type RegisterView struct {
+	Accounts    []FilterOption   // account filter dropdown
+	Categories  []FilterOption   // category filter dropdown
+	BulkCats    []CategoryOption // bulk-categorize picker (carries kind)
+	SelAccount  int64
+	SelType     string
+	SelCategory int64
+	Query       string
+	Rows        []RegisterRow
+	ErrMsg      string
 }
 
 // RecurringRow is one recurring template formatted for display (Epic 9). Amount/

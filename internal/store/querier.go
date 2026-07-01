@@ -15,6 +15,10 @@ import (
 type Querier interface {
 	AddExchangeRate(ctx context.Context, arg AddExchangeRateParams) (ExchangeRate, error)
 	AddPrice(ctx context.Context, arg AddPriceParams) (Price, error)
+	// Assign one category to many transactions in a single statement (Story 10.1,
+	// one tx AD-3). The type guard scopes the write to rows matching the category's
+	// kind, so a transfer/trade id can never be categorized even if submitted.
+	BulkSetCategory(ctx context.Context, arg BulkSetCategoryParams) (int64, error)
 	CategoryUsageCounts(ctx context.Context) ([]CategoryUsageCountsRow, error)
 	ClearCategoryFromTransactions(ctx context.Context, categoryID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
@@ -101,6 +105,11 @@ type Querier interface {
 	// by next_due then id so the soonest-due surface first.
 	ListRecurring(ctx context.Context) ([]ListRecurringRow, error)
 	ListSecurities(ctx context.Context) ([]Security, error)
+	// The (id, type) of the given transactions, for validating a bulk-categorize
+	// selection (Story 10.1): every selected row must exist and be income/expense of
+	// the category's kind. Transfers/trades are returned with their type so the
+	// service can reject them (they are not categorizable, AD-9).
+	ListTransactionKindsByIDs(ctx context.Context, dollar_1 []int64) ([]ListTransactionKindsByIDsRow, error)
 	ListTransactions(ctx context.Context) ([]Transaction, error)
 	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)

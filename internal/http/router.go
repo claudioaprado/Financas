@@ -96,6 +96,7 @@ type Transactions interface {
 	List(ctx context.Context, accountID int64) ([]transaction.Transaction, error)
 	CategoryTransactions(ctx context.Context, categoryID int64) ([]transaction.CategoryTxn, []money.Money, error)
 	Register(ctx context.Context, f transaction.RegisterFilter) ([]transaction.RegisterRow, error)
+	BulkCategorize(ctx context.Context, ids []int64, categoryID int64) (int, error)
 	// Investment trades (Story 4.2).
 	Buy(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
 	Sell(ctx context.Context, accountID, securityID int64, quantity, price, fees decimal.Decimal, date time.Time, description string) (transaction.Transaction, error)
@@ -250,6 +251,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/", dashboardPage(deps))
 		pr.Get("/investments", investmentsPage(deps))
 		pr.Get("/transactions", transactionsRegister(deps))
+		pr.Post("/transactions/bulk-categorize", transactionsBulkCategorize(deps))
 		pr.Get("/accounts", accountsForm(deps))
 		pr.Post("/accounts", accountsCreate(deps))
 		pr.Post("/accounts/rename", accountsRename(deps))
@@ -473,6 +475,8 @@ func knownErrMsg(err error) (string, bool) {
 		return "Categoria não encontrada.", true
 	case errors.Is(err, transaction.ErrCategoryKindMismatch):
 		return "O tipo da categoria deve combinar com o tipo da transação.", true
+	case errors.Is(err, transaction.ErrNoSelection):
+		return "Selecione ao menos uma transação.", true
 	case errors.Is(err, transaction.ErrNotInvestmentAccount):
 		return "Compra, venda e dividendo exigem uma conta de investimento.", true
 	case errors.Is(err, transaction.ErrSecurityNotFound):
@@ -1071,15 +1075,8 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 
 func transactionsRegister(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		acctID, _ := strconv.ParseInt(req.URL.Query().Get("account"), 10, 64)
-		catID, _ := strconv.ParseInt(req.URL.Query().Get("category"), 10, 64)
-		typ := transaction.TxType(req.URL.Query().Get("type"))
-
-		regRows, rErr := deps.Transactions.Register(req.Context(), transaction.RegisterFilter{
-			AccountID:  acctID,
-			Type:       typ,
-			CategoryID: catID,
-		})
+		f := registerFilter(req)
+		regRows, rErr := deps.Transactions.Register(req.Context(), f)
 		if rErr != nil {
 			logLoad(req, "transactions register", rErr)
 			renderError(deps, w, req, "transactions", loadErrorMsg)
@@ -1093,30 +1090,103 @@ func transactionsRegister(deps Deps) http.HandlerFunc {
 			_ = web.TransactionRows(rows).Render(req.Context(), w)
 			return
 		}
-
-		// The filter dropdowns are secondary: a load failure degrades to an empty
-		// filter (logged), it does not fail the register page.
-		var accounts []web.FilterOption
-		if accts, err := deps.Accounts.List(req.Context(), true); err != nil {
-			logLoad(req, "register accounts filter", err)
-		} else {
-			for _, a := range accts {
-				accounts = append(accounts, web.FilterOption{ID: a.ID, Label: a.Name})
-			}
-		}
-		var cats []web.FilterOption
-		if deps.Categories != nil {
-			if cs, err := deps.Categories.List(req.Context()); err != nil {
-				logLoad(req, "register categories filter", err)
-			} else {
-				for _, c := range cs {
-					cats = append(cats, web.FilterOption{ID: c.ID, Label: c.Name})
-				}
-			}
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = web.TransactionsPage(shellData(deps, req.Context(), "transactions"), accounts, cats, acctID, string(typ), catID, rows).Render(req.Context(), w)
+		renderRegister(deps, w, req, f, rows, "", http.StatusOK)
 	}
+}
+
+// registerFilter reads the register's filters from the request (query on GET,
+// form on POST — FormValue covers both). CategoryID/AccountID default to 0 (all).
+func registerFilter(req *http.Request) transaction.RegisterFilter {
+	acctID, _ := strconv.ParseInt(req.FormValue("account"), 10, 64)
+	catID, _ := strconv.ParseInt(req.FormValue("category"), 10, 64)
+	return transaction.RegisterFilter{
+		AccountID:  acctID,
+		Type:       transaction.TxType(req.FormValue("type")),
+		CategoryID: catID,
+	}
+}
+
+// renderRegister renders the full register page for the given filter + rows,
+// gathering the (secondary) filter/bulk dropdowns. Used by the GET handler and by
+// a failed bulk op (to show the error banner without losing the filters).
+func renderRegister(deps Deps, w http.ResponseWriter, req *http.Request, f transaction.RegisterFilter, rows []web.RegisterRow, errMsg string, code int) {
+	v := web.RegisterView{
+		Rows:        rows,
+		SelAccount:  f.AccountID,
+		SelType:     string(f.Type),
+		SelCategory: f.CategoryID,
+		ErrMsg:      errMsg,
+	}
+	// Dropdowns are secondary: a load failure degrades to empty (logged), it does
+	// not fail the register page.
+	if accts, err := deps.Accounts.List(req.Context(), true); err != nil {
+		logLoad(req, "register accounts filter", err)
+	} else {
+		for _, a := range accts {
+			v.Accounts = append(v.Accounts, web.FilterOption{ID: a.ID, Label: a.Name})
+		}
+	}
+	if deps.Categories != nil {
+		if cs, err := deps.Categories.List(req.Context()); err != nil {
+			logLoad(req, "register categories filter", err)
+		} else {
+			for _, c := range cs {
+				v.Categories = append(v.Categories, web.FilterOption{ID: c.ID, Label: c.Name})
+				v.BulkCats = append(v.BulkCats, web.CategoryOption{ID: c.ID, Name: c.Name, Kind: string(c.Kind)})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.TransactionsPage(shellData(deps, req.Context(), "transactions"), v).Render(req.Context(), w)
+}
+
+// transactionsBulkCategorize applies one category to the selected income/expense
+// register rows (Story 10.1 / FR-21) in one DB transaction, then redirects back
+// to the register preserving the active filters. On failure it re-renders the
+// page with an error banner (filters intact).
+func transactionsBulkCategorize(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		categoryID, _ := strconv.ParseInt(req.PostFormValue("category_id"), 10, 64)
+		ids := make([]int64, 0, len(req.PostForm["tx"]))
+		for _, v := range req.PostForm["tx"] {
+			if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		if _, err := deps.Transactions.BulkCategorize(req.Context(), ids, categoryID); err != nil {
+			f := registerFilter(req)
+			regRows, rErr := deps.Transactions.Register(req.Context(), f)
+			if rErr != nil {
+				logLoad(req, "register reload after bulk", rErr)
+				renderError(deps, w, req, "transactions", loadErrorMsg)
+				return
+			}
+			renderRegister(deps, w, req, f, mapRegisterRows(regRows),
+				problemMsg(req, "Não foi possível categorizar as transações. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, registerRedirect(req), http.StatusSeeOther)
+	}
+}
+
+// registerRedirect rebuilds the /transactions URL preserving the active filters
+// carried by the bulk form's hidden fields.
+func registerRedirect(req *http.Request) string {
+	q := url.Values{}
+	for _, k := range []string{"account", "type", "category"} {
+		if v := req.PostFormValue(k); v != "" && v != "0" {
+			q.Set(k, v)
+		}
+	}
+	if len(q) == 0 {
+		return "/transactions"
+	}
+	return "/transactions?" + q.Encode()
 }
 
 // mapRegisterRows maps service register rows to their pre-formatted view shape
@@ -1136,6 +1206,7 @@ func mapRegisterRows(regRows []transaction.RegisterRow) []web.RegisterRow {
 			Amount:      registerAmount(r),
 			Incoming:    r.Incoming,
 			IsTransfer:  r.IsTransfer,
+			Editable:    r.Editable,
 		})
 	}
 	return rows

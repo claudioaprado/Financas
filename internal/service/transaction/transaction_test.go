@@ -394,3 +394,82 @@ func TestTransfer(t *testing.T) {
 		t.Errorf("cross-currency missing to = %v; want ErrCrossCurrencyToAmountRequired", err)
 	}
 }
+
+// TestBulkCategorize covers Story 10.1: one category applied to many income/
+// expense rows in one op, honoring the kind rule (mixed/wrong-kind/transfer
+// selections rejected whole) and reusing the register read seam.
+func TestBulkCategorize(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	accts := account.New(pool)
+	svc := New(pool)
+	run := time.Now().UnixNano()
+
+	cash, err := accts.Create(ctx, fmt.Sprintf("Cash-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create cash: %v", err)
+	}
+	other, err := accts.Create(ctx, fmt.Sprintf("Other-%d", run), account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	expCat, err := store.New(pool).CreateCategory(ctx, store.CreateCategoryParams{Name: fmt.Sprintf("Food-%d", run), Kind: "expense"})
+	if err != nil {
+		t.Fatalf("create expense category: %v", err)
+	}
+	incCat, err := store.New(pool).CreateCategory(ctx, store.CreateCategoryParams{Name: fmt.Sprintf("Pay-%d", run), Kind: "income"})
+	if err != nil {
+		t.Fatalf("create income category: %v", err)
+	}
+
+	e1, _ := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("10"), d(t, "2024-05-01"), "a", 0)
+	e2, _ := svc.Record(ctx, cash.ID, Expense, decimal.RequireFromString("20"), d(t, "2024-05-02"), "b", 0)
+	inc, _ := svc.Record(ctx, cash.ID, Income, decimal.RequireFromString("100"), d(t, "2024-05-03"), "pay", 0)
+	if err := svc.Transfer(ctx, cash.ID, other.ID, decimal.RequireFromString("5"), decimal.Zero, d(t, "2024-05-04"), "mv"); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	// No selection / no category are rejected.
+	if _, err := svc.BulkCategorize(ctx, nil, expCat.ID); !errors.Is(err, ErrNoSelection) {
+		t.Fatalf("empty selection = %v; want ErrNoSelection", err)
+	}
+	if _, err := svc.BulkCategorize(ctx, []int64{e1.ID}, 0); !errors.Is(err, ErrCategoryNotFound) {
+		t.Fatalf("no category = %v; want ErrCategoryNotFound", err)
+	}
+
+	// Categorize the two expenses; a duplicate id is deduped (n == 2).
+	n, err := svc.BulkCategorize(ctx, []int64{e1.ID, e2.ID, e1.ID}, expCat.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("bulk categorize = (%d, %v); want (2, nil)", n, err)
+	}
+	rows, err := svc.Register(ctx, RegisterFilter{CategoryID: expCat.ID})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("categorized rows = %d; want 2", len(rows))
+	}
+
+	// A wrong-kind row (income under an expense category) rejects the whole batch,
+	// and nothing changes.
+	if _, err := svc.BulkCategorize(ctx, []int64{e1.ID, inc.ID}, expCat.ID); !errors.Is(err, ErrCategoryKindMismatch) {
+		t.Fatalf("mixed kind = %v; want ErrCategoryKindMismatch", err)
+	}
+	// The income can be categorized with an income category.
+	if _, err := svc.BulkCategorize(ctx, []int64{inc.ID}, incCat.ID); err != nil {
+		t.Fatalf("income bulk = %v", err)
+	}
+	// A non-existent id rejects the batch.
+	if _, err := svc.BulkCategorize(ctx, []int64{e1.ID, 999999}, expCat.ID); !errors.Is(err, ErrTxNotFound) {
+		t.Fatalf("missing id = %v; want ErrTxNotFound", err)
+	}
+}
