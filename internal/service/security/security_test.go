@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 func testDatabaseURL(t *testing.T) string {
@@ -88,6 +92,15 @@ func TestSecurity(t *testing.T) {
 		t.Errorf("get missing = %v; want ErrNotFound", err)
 	}
 
+	// Free-text guards (deferred 4.1): a symbol with interior whitespace and an
+	// over-long name are rejected by the shared validator.
+	if _, err := svc.Create(ctx, fmt.Sprintf("PE TR%d", run), "Spaced", Stock, money.USD); !errors.Is(err, validate.ErrSymbolBadChars) {
+		t.Errorf("spaced symbol = %v; want ErrSymbolBadChars", err)
+	}
+	if _, err := svc.Create(ctx, fmt.Sprintf("D%d", run), strings.Repeat("x", validate.MaxNameLen+1), Stock, money.USD); !errors.Is(err, validate.ErrNameTooLong) {
+		t.Errorf("over-long name = %v; want ErrNameTooLong", err)
+	}
+
 	// A second, distinct security lists, ordered by symbol.
 	voo := fmt.Sprintf("AAA%d", run)
 	if _, err := svc.Create(ctx, voo, "Vanguard S&P 500 ETF", ETF, money.USD); err != nil {
@@ -105,5 +118,39 @@ func TestSecurity(t *testing.T) {
 		if list[i-1].Symbol > list[i].Symbol {
 			t.Errorf("list not ordered by symbol: %q before %q", list[i-1].Symbol, list[i].Symbol)
 		}
+	}
+}
+
+// TestSymbolCaseInsensitiveDBBackstop proves the DB enforces case-insensitive
+// uniqueness independently of the service (migration 00017's functional index).
+// The service always upper-cases, so a case-collision can only arrive from a
+// non-service write path (e.g. a restore from export) — simulated here with a
+// raw lower-case INSERT, which must fail with a unique violation.
+func TestSymbolCaseInsensitiveDBBackstop(t *testing.T) {
+	url := testDatabaseURL(t)
+	ctx := context.Background()
+	if err := store.Migrate(ctx, url, db.Migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.NewPool(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	run := time.Now().UnixNano()
+	sym := fmt.Sprintf("ZZB%d", run) // upper-case, letters + digits, well under the cap
+
+	if _, err := New(pool).Create(ctx, sym, "Backstop", Stock, money.USD); err != nil {
+		t.Fatalf("create security: %v", err)
+	}
+
+	// Raw insert of the lower-cased symbol bypasses the service normalization.
+	_, err = pool.Exec(ctx,
+		`INSERT INTO security (symbol, name, type, quote_currency) VALUES ($1, $2, 'stock', 'USD')`,
+		strings.ToLower(sym), "Sneaky")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("raw lower-case insert err = %v; want unique violation (23505)", err)
 	}
 }
