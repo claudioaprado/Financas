@@ -586,6 +586,30 @@ func (s *stubBudgets) Delete(_ context.Context, categoryID int64) error {
 	return budget.ErrNotFound
 }
 
+// stubAnalytics is an in-memory Analytics for handler tests.
+type stubAnalytics struct {
+	report domain.Analytics
+	err    error
+}
+
+func (s *stubAnalytics) Report(_ context.Context, _ int) (domain.Analytics, error) {
+	return s.report, s.err
+}
+
+func cannedAnalytics() domain.Analytics {
+	brl := func(s string) money.Money { return money.New(decimal.RequireFromString(s), money.BRL) }
+	return domain.Analytics{
+		Spending: []domain.CategorySpend{
+			{Category: "Rent", Total: brl("600"), Percent: 60},
+			{Category: "Food", Total: brl("400"), Percent: 40},
+		},
+		Flow: []domain.MonthFlow{
+			{Year: 2026, Month: time.May, Income: brl("0"), Expense: brl("0")},
+			{Year: 2026, Month: time.June, Income: brl("2000"), Expense: brl("1000")},
+		},
+	}
+}
+
 func stubImportResult(content string) importer.Result {
 	res := importer.Result{AccountName: "Acc", Currency: "USD"}
 	for _, p := range importer.Parse(content) {
@@ -873,6 +897,7 @@ func testDeps(authOK bool, ready ReadyCheck) Deps {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		CategoryRules: &stubCategoryRules{},
 		Budgets:       &stubBudgets{},
+		Analytics:     &stubAnalytics{report: cannedAnalytics()},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
@@ -1934,6 +1959,7 @@ func TestHoldingValuationColumns(t *testing.T) {
 		Categories:    &stubCategories{usage: map[int64]int64{}},
 		CategoryRules: &stubCategoryRules{},
 		Budgets:       &stubBudgets{},
+		Analytics:     &stubAnalytics{report: cannedAnalytics()},
 		Securities:    &stubSecurities{},
 		Imports:       &stubImports{},
 		OwnerName:     "TestOwner",
@@ -2279,6 +2305,38 @@ func TestBudgetsPage(t *testing.T) {
 	router.ServeHTTP(recDel, withCookie(del, cookie))
 	if recDel.Code != http.StatusSeeOther || len(budgets.budgets) != 0 {
 		t.Fatalf("delete budget = %d, budgets = %+v", recDel.Code, budgets.budgets)
+	}
+}
+
+// TestAnalyticsPage renders the spending & cash-flow view (Story 8.3): the
+// breakdown, the monthly chart, and the months range toggle.
+func TestAnalyticsPage(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/analytics", nil), cookie))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("analytics = %d, want 200", rec.Code)
+	}
+	for _, want := range []string{"Análises", "Gastos por categoria", "Rent", "60%", "600,00 BRL", "Fluxo de caixa", "jun/26", "Receita", "Despesa", "12 meses"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("analytics page missing %q\n%s", want, body)
+		}
+	}
+	// The default window is 12 months (aria-current marks it active).
+	if !strings.Contains(body, `href="/analytics?months=12" class="rounded px-2 py-0.5 bg-accent/10 text-accent font-medium" aria-current="true"`) {
+		t.Fatalf("12-month range not marked active:\n%s", body)
+	}
+
+	// Selecting 6 months marks that toggle active instead.
+	rec6 := httptest.NewRecorder()
+	router.ServeHTTP(rec6, withCookie(httptest.NewRequest(http.MethodGet, "/analytics?months=6", nil), cookie))
+	if !strings.Contains(rec6.Body.String(), `href="/analytics?months=6" class="rounded px-2 py-0.5 bg-accent/10 text-accent font-medium" aria-current="true"`) {
+		t.Fatalf("6-month range not marked active:\n%s", rec6.Body.String())
 	}
 }
 

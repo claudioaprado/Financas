@@ -147,6 +147,7 @@ func TestBudgetReport(t *testing.T) {
 	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
 		t.Fatalf("set display currency: %v", err)
 	}
+	defer func() { _ = set.SetDisplayCurrency(ctx, money.USD) }()
 	// A USD→BRL rate of 5, effective before the transactions we date.
 	if _, err := rates.Add(ctx, money.USD, money.BRL, date(2026, 1, 1), decimal.RequireFromString("5")); err != nil {
 		t.Fatalf("add rate: %v", err)
@@ -233,6 +234,7 @@ func TestBudgetReportMissingRate(t *testing.T) {
 	if err := set.SetDisplayCurrency(ctx, money.BRL); err != nil {
 		t.Fatalf("set display currency: %v", err)
 	}
+	defer func() { _ = set.SetDisplayCurrency(ctx, money.USD) }()
 	usdAcct, err := accts.Create(ctx, fmt.Sprintf("USDm-%d", run), account.Cash, money.USD)
 	if err != nil {
 		t.Fatalf("create USD account: %v", err)

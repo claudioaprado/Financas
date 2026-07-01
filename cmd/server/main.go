@@ -19,6 +19,7 @@ import (
 	"github.com/claudioaprado/financas/internal/config"
 	apphttp "github.com/claudioaprado/financas/internal/http"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/analytics"
 	"github.com/claudioaprado/financas/internal/service/auth"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/budget"
@@ -85,6 +86,7 @@ func main() {
 			Categories:    category.New(pool),
 			CategoryRules: categoryrule.New(pool),
 			Budgets:       budget.New(pool),
+			Analytics:     analytics.New(pool),
 			Securities:    security.New(pool),
 			Imports:       importer.New(pool),
 			Valuation:     valuation.New(pool),

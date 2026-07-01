@@ -77,6 +77,15 @@ type Querier interface {
 	ListCategoryTransactions(ctx context.Context, categoryID pgtype.Int8) ([]Transaction, error)
 	ListCurrencies(ctx context.Context) ([]Currency, error)
 	ListExchangeRates(ctx context.Context) ([]ExchangeRate, error)
+	// Spending & cash-flow analytics (Story 8.3 / FR-19). Every income/expense
+	// transaction in a date window, categorized OR NOT (uncategorized rows still
+	// count toward cash-flow and group under the empty category name). The money side
+	// picks the amount + account currency: income credits to_account, expense debits
+	// from_account. The `type IN ('income','expense')` whitelist scopes this to the
+	// spending universe: transfers and investment trades (buy/sell/dividend) share
+	// this same transaction table under other type values (migration 00010, AD-9) and
+	// are excluded by it — do NOT loosen it. Ordered by date for a stable sequence.
+	ListLedgerForAnalytics(ctx context.Context, arg ListLedgerForAnalyticsParams) ([]ListLedgerForAnalyticsRow, error)
 	ListPrices(ctx context.Context) ([]ListPricesRow, error)
 	ListSecurities(ctx context.Context) ([]Security, error)
 	ListTransactions(ctx context.Context) ([]Transaction, error)

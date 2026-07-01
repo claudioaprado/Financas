@@ -11,6 +11,22 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // countLabel renders a usage count for display.
 func countLabel(n int64) string { return strconv.FormatInt(n, 10) }
 
+// barWidth / barHeight render a clamped percentage as an inline CSS dimension for
+// the analytics bars (dynamic sizing Tailwind can't express at build time). The
+// value is clamped to [0,100] so a stray figure can never overflow the track.
+func barWidth(pct int) string  { return "width:" + clampPct(pct) + "%" }
+func barHeight(pct int) string { return "height:" + clampPct(pct) + "%" }
+
+func clampPct(pct int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return strconv.Itoa(pct)
+}
+
 // budgetRemainingClass colours a budget row's Remaining: green when the standing
 // is favorable (computed by the caller — on/under an expense budget, or meeting/
 // beating an income target), red otherwise.
@@ -398,6 +414,42 @@ type RuleRow struct {
 	MatchText    string
 	CategoryName string
 	Kind         string // "income" | "expense"
+}
+
+// SpendRow is one expense category's share of the window's spending on the
+// analytics page (Story 8.3): a pre-formatted Display-Currency value and the
+// reconciled integer Percent (Σ == 100), which also drives the bar width.
+type SpendRow struct {
+	Category string
+	Value    string
+	Percent  int
+}
+
+// FlowBar is one month's income-vs-expense column in the cash-flow chart (Story
+// 8.3). IncomeH/ExpenseH are bar heights as a percentage (0–100) of the tallest
+// bar in the window, computed by the handler (AD-1); Income/Expense are the
+// pre-formatted Display-Currency amounts for the hover title.
+type FlowBar struct {
+	Label    string
+	Income   string
+	Expense  string
+	IncomeH  int
+	ExpenseH int
+}
+
+// AnalyticsView is the spending & cash-flow page (Story 8.3 / FR-19): a months
+// range toggle, an expense-by-category breakdown, and a monthly income-vs-expense
+// chart — all in the Display Currency. HasFlow is false when no month in the
+// window has any activity. Missing holds the joined currency codes excluded for
+// lack of a rate (empty when none). ErrMsg is a load-failure banner.
+type AnalyticsView struct {
+	Display  string
+	Ranges   []ChartRange
+	Spending []SpendRow
+	Flow     []FlowBar
+	HasFlow  bool
+	Missing  string
+	ErrMsg   string
 }
 
 // BudgetViewRow is one budgeted category's standing for the selected month on the

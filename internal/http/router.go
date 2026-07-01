@@ -127,6 +127,12 @@ type Budgets interface {
 	Delete(ctx context.Context, categoryID int64) error
 }
 
+// Analytics derives the spending & cash-flow view (Story 8.3 / FR-19). Defined
+// here (consumer side) and implemented by service/analytics.
+type Analytics interface {
+	Report(ctx context.Context, months int) (domain.Analytics, error)
+}
+
 // Securities creates and lists the owner's securities. Defined here (consumer
 // side) and implemented by service/security.
 type Securities interface {
@@ -175,6 +181,7 @@ type Deps struct {
 	Categories    Categories
 	CategoryRules CategoryRules
 	Budgets       Budgets
+	Analytics     Analytics
 	Securities    Securities
 	Imports       Imports
 	Valuation     Valuation
@@ -255,7 +262,7 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories/{id}", categorySummary(deps))
 		pr.Get("/securities", securitiesPage(deps))
 		pr.Post("/securities", securitiesCreate(deps))
-		pr.Get("/analytics", renderPage(deps, "analytics", func(d web.ShellData) templ.Component { return web.ComingSoon(d, "Análises") }))
+		pr.Get("/analytics", analyticsPage(deps))
 		pr.Get("/settings", settingsForm(deps))
 		pr.Post("/settings", settingsSubmit(deps))
 		pr.Get("/export", exportData(deps))
@@ -1339,6 +1346,112 @@ func renderBudgets(deps Deps, w http.ResponseWriter, req *http.Request, errMsg s
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.BudgetsPage(shellData(deps, req.Context(), "settings"), monthValue, string(cur), cats, rows, notice, errMsg).Render(req.Context(), w)
+}
+
+func analyticsPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		months := analyticsMonths(req)
+		v := web.AnalyticsView{Ranges: analyticsRanges(months)}
+
+		cur, err := deps.Settings.DisplayCurrency(req.Context())
+		if err != nil {
+			logLoad(req, "analytics display currency", err)
+			renderError(deps, w, req, "analytics", loadErrorMsg)
+			return
+		}
+		v.Display = string(cur)
+
+		rep, err := deps.Analytics.Report(req.Context(), months)
+		if err != nil {
+			logLoad(req, "analytics report", err)
+			renderError(deps, w, req, "analytics", loadErrorMsg)
+			return
+		}
+
+		for _, s := range rep.Spending {
+			name := s.Category
+			if name == "" {
+				name = "Sem categoria"
+			}
+			v.Spending = append(v.Spending, web.SpendRow{Category: name, Value: s.Total.Display(), Percent: s.Percent})
+		}
+
+		// Scale the cash-flow bars to the tallest income/expense in the window.
+		maxV := decimal.Zero
+		for _, f := range rep.Flow {
+			if a := f.Income.Amount(); a.GreaterThan(maxV) {
+				maxV = a
+			}
+			if a := f.Expense.Amount(); a.GreaterThan(maxV) {
+				maxV = a
+			}
+		}
+		v.HasFlow = maxV.IsPositive()
+		for _, f := range rep.Flow {
+			v.Flow = append(v.Flow, web.FlowBar{
+				Label:    ptMonthLabel(f.Year, f.Month),
+				Income:   f.Income.Display(),
+				Expense:  f.Expense.Display(),
+				IncomeH:  barPct(f.Income.Amount(), maxV),
+				ExpenseH: barPct(f.Expense.Amount(), maxV),
+			})
+		}
+
+		if len(rep.Missing) > 0 {
+			codes := make([]string, len(rep.Missing))
+			for i, c := range rep.Missing {
+				codes[i] = string(c)
+			}
+			v.Missing = strings.Join(codes, ", ")
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = web.AnalyticsPage(shellData(deps, req.Context(), "analytics"), v).Render(req.Context(), w)
+	}
+}
+
+// analyticsMonths reads ?months, accepting only 6/12/24 and defaulting to 12.
+func analyticsMonths(req *http.Request) int {
+	switch req.URL.Query().Get("months") {
+	case "6":
+		return 6
+	case "24":
+		return 24
+	default:
+		return 12
+	}
+}
+
+// analyticsRanges builds the months range toggle, marking the active window.
+func analyticsRanges(active int) []web.ChartRange {
+	out := make([]web.ChartRange, 0, 3)
+	for _, n := range []int{6, 12, 24} {
+		key := strconv.Itoa(n)
+		out = append(out, web.ChartRange{
+			Key:    key,
+			Label:  key + " meses",
+			Href:   "/analytics?months=" + key,
+			Active: n == active,
+		})
+	}
+	return out
+}
+
+// barPct is v as an integer percentage of max (0 when max is non-positive).
+func barPct(v, maxV decimal.Decimal) int {
+	if !maxV.IsPositive() {
+		return 0
+	}
+	return int(v.Mul(decimal.NewFromInt(100)).Div(maxV).IntPart())
+}
+
+// ptMonthAbbrev holds the Brazilian three-letter month abbreviations (index 0 =
+// January) for the cash-flow axis labels.
+var ptMonthAbbrev = [...]string{"jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"}
+
+// ptMonthLabel renders a month as "abr/26" (pt-BR abbreviation + 2-digit year).
+func ptMonthLabel(year int, m time.Month) string {
+	return fmt.Sprintf("%s/%02d", ptMonthAbbrev[int(m)-1], year%100)
 }
 
 func categorySummary(deps Deps) http.HandlerFunc {
