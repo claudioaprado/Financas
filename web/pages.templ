@@ -572,102 +572,124 @@ templ SettingsPage(data ShellData, currencies []string, notice string, noticeIsE
 // archive controls (Story 2.3). Cash/investment accounts carry a cash balance,
 // credit accounts a balance owed; the balance value is derived from the
 // transaction ledger in later epics (AD-2), so it shows a placeholder now.
-templ AccountsPage(data ShellData, accounts []AccountRow, types []string, currencies []string, showArchived bool, errMsg string) {
+templ AccountsPage(data ShellData, accounts []AccountRow, types []string, currencies []string, showArchived bool, selectedType string, errMsg string) {
 	@Shell(data) {
-		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
+		<section class="max-w-4xl rounded-card bg-white p-6 shadow-card">
 			<h1 class="text-2xl font-bold">Contas</h1>
-			<p class="mt-1 text-sm text-muted">Contas de caixa, crédito e investimento, cada uma em sua própria moeda base. Os saldos são derivados de suas transações em etapas posteriores; contas arquivadas são mantidas para histórico, mas excluídas das visualizações padrão e do patrimônio líquido.</p>
+			<p class="mt-1 text-sm text-muted">Contas de caixa, crédito e investimento, cada uma em sua própria moeda base. Os saldos são derivados de suas transações; contas arquivadas são mantidas para histórico, mas excluídas das visualizações padrão e do patrimônio líquido.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
-			<form method="post" action="/accounts" class="mt-4 flex flex-wrap items-end gap-2">
-				<div>
-					<label class="block text-xs" for="name">Nome</label>
-					<input id="name" name="name" required class="w-48 rounded border px-2 py-1"/>
+			<form method="post" action="/accounts" class="mt-6 flex flex-wrap items-end gap-4">
+				<div class="flex flex-col gap-1">
+					<label class="text-xs text-muted" for="name">Nome</label>
+					<input id="name" name="name" required class="w-48 rounded border px-3 py-2"/>
 				</div>
-				<div>
-					<label class="block text-xs" for="type">Tipo</label>
-					<select id="type" name="type" class="rounded border px-2 py-1">
+				<div class="flex flex-col gap-1">
+					<label class="text-xs text-muted" for="type">Tipo</label>
+					<select id="type" name="type" class="rounded border px-3 py-2">
 						for _, t := range types {
-							<option value={ t }>{ t }</option>
+							<option value={ t }>{ AccountTypeName(t) }</option>
 						}
 					</select>
 				</div>
-				<div>
-					<label class="block text-xs" for="currency">Moeda</label>
-					<select id="currency" name="currency" class="rounded border px-2 py-1">
+				<div class="flex flex-col gap-1">
+					<label class="text-xs text-muted" for="currency">Moeda</label>
+					<select id="currency" name="currency" class="rounded border px-3 py-2">
 						for _, c := range currencies {
 							<option value={ c }>{ c }</option>
 						}
 					</select>
 				</div>
-				<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Criar conta</button>
+				<button class="rounded bg-slate-900 px-4 py-2 text-white" type="submit">Criar conta</button>
 			</form>
-			<div class="mt-6 flex items-center justify-between">
-				<h2 class="text-sm font-semibold text-muted">
+			<div class="mt-8 flex flex-wrap items-end justify-between gap-4">
+				<form method="get" action="/accounts" class="flex flex-wrap items-end gap-3">
 					if showArchived {
-						Todas as contas
-					} else {
-						Contas ativas
+						<input type="hidden" name="show" value="archived"/>
 					}
-				</h2>
+					<div class="flex flex-col gap-1">
+						<label class="text-xs text-muted" for="filter-type">Filtrar por tipo</label>
+						<select id="filter-type" name="type" onchange="this.form.submit()" class="rounded border px-3 py-2">
+							<option value="" selected?={ selectedType == "" }>Todos os tipos</option>
+							for _, t := range types {
+								<option value={ t } selected?={ selectedType == t }>{ AccountTypeName(t) }</option>
+							}
+						</select>
+					</div>
+					<button class="rounded border px-3 py-2" type="submit">Filtrar</button>
+				</form>
 				if showArchived {
-					<a href="/accounts" class="text-sm text-accent hover:underline">Ocultar arquivadas</a>
+					<a href={ templ.URL(AccountsListHref(selectedType, false)) } class="text-sm text-accent hover:underline">Ocultar arquivadas</a>
 				} else {
-					<a href="/accounts?show=archived" class="text-sm text-accent hover:underline">Mostrar arquivadas</a>
+					<a href={ templ.URL(AccountsListHref(selectedType, true)) } class="text-sm text-accent hover:underline">Mostrar arquivadas</a>
 				}
 			</div>
-			<table class="mt-2 w-full text-sm">
-				<thead>
-					<tr class="text-left text-muted">
-						<th class="py-1">Nome</th>
-						<th>Tipo</th>
-						<th>Moeda</th>
-						<th>Saldo</th>
-						<th class="text-right">Ações</th>
-					</tr>
-				</thead>
-				<tbody>
-					if len(accounts) == 0 {
-						<tr><td colspan="5" class="py-2 text-muted">Nenhuma conta ainda.</td></tr>
-					}
-					for _, a := range accounts {
-						<tr class="border-t border-black/5">
-							<td class="py-1">
-								<a href={ templ.URL("/accounts/" + accountID(a.ID)) } class="text-accent hover:underline">{ a.Name }</a>
-								if a.Archived {
-									<span class="ml-1 rounded bg-black/5 px-1 text-xs text-muted">arquivado</span>
-								}
-							</td>
-							<td>{ a.Type }</td>
-							<td>{ a.Currency }</td>
-							<td class="text-muted">{ a.BalanceLabel }: —</td>
-							<td>
-								<div class="flex items-center justify-end gap-2">
-									<form method="post" action="/accounts/rename" class="flex items-center gap-1">
-										<input type="hidden" name="id" value={ accountID(a.ID) }/>
-										<input name="name" value={ a.Name } required class="w-36 rounded border px-2 py-1"/>
-										<button class="rounded border px-2 py-1" type="submit">Renomear</button>
-									</form>
-									<form method="post" action="/accounts/archive">
-										<input type="hidden" name="id" value={ accountID(a.ID) }/>
-										if showArchived {
-											<input type="hidden" name="show" value="archived"/>
-										}
-										if a.Archived {
-											<input type="hidden" name="archived" value="false"/>
-											<button class="rounded border px-2 py-1" type="submit">Desarquivar</button>
-										} else {
-											<input type="hidden" name="archived" value="true"/>
-											<button class="rounded border px-2 py-1" type="submit">Arquivar</button>
-										}
-									</form>
-								</div>
-							</td>
+			<div class="mt-4 overflow-hidden rounded border border-black/5">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-black/5 bg-slate-50 text-left text-muted">
+							<th class="px-3 py-2 font-medium">Nome</th>
+							<th class="px-3 py-2 font-medium">Tipo</th>
+							<th class="px-3 py-2 font-medium">Moeda</th>
+							<th class="px-3 py-2 text-right font-medium">Saldo</th>
+							<th class="px-3 py-2 text-right font-medium">Ações</th>
 						</tr>
-					}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						if len(accounts) == 0 {
+							<tr><td colspan="5" class="px-3 py-3 text-muted">Nenhuma conta encontrada.</td></tr>
+						}
+						for _, a := range accounts {
+							<tr class="border-t border-black/5">
+								<td class="px-3 py-2">
+									<a href={ templ.URL("/accounts/" + accountID(a.ID)) } class="font-medium text-accent hover:underline">{ a.Name }</a>
+									if a.Archived {
+										<span class="ml-2 rounded-sm bg-black/5 px-1.5 py-0.5 text-xs text-muted">arquivado</span>
+									}
+								</td>
+								<td class="px-3 py-2">{ AccountTypeName(a.Type) }</td>
+								<td class="px-3 py-2">{ a.Currency }</td>
+								<td class="px-3 py-2 text-right">
+									<div class="text-xs text-muted">{ a.BalanceLabel }</div>
+									<div class="tabular-nums font-medium">{ a.Balance }</div>
+								</td>
+								<td class="px-3 py-2">
+									<div class="flex items-center justify-end gap-2">
+										<form method="post" action="/accounts/rename" class="flex items-center gap-2">
+											<input type="hidden" name="id" value={ accountID(a.ID) }/>
+											if showArchived {
+												<input type="hidden" name="show" value="archived"/>
+											}
+											if selectedType != "" {
+												<input type="hidden" name="type" value={ selectedType }/>
+											}
+											<input name="name" value={ a.Name } required class="w-36 rounded border px-3 py-1.5"/>
+											<button class="rounded border px-3 py-1.5" type="submit">Renomear</button>
+										</form>
+										<form method="post" action="/accounts/archive">
+											<input type="hidden" name="id" value={ accountID(a.ID) }/>
+											if showArchived {
+												<input type="hidden" name="show" value="archived"/>
+											}
+											if selectedType != "" {
+												<input type="hidden" name="type" value={ selectedType }/>
+											}
+											if a.Archived {
+												<input type="hidden" name="archived" value="false"/>
+												<button class="rounded border px-3 py-1.5" type="submit">Desarquivar</button>
+											} else {
+												<input type="hidden" name="archived" value="true"/>
+												<button class="rounded border px-3 py-1.5" type="submit">Arquivar</button>
+											}
+										</form>
+									</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
 		</section>
 	}
 }

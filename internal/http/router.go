@@ -678,12 +678,19 @@ func showArchived(req *http.Request) bool {
 	return req.URL.Query().Get("show") == "archived" || req.PostFormValue("show") == "archived"
 }
 
-// accountsRedirect preserves the archived view across a redirect.
+// accountsRedirect preserves the archived view and type filter across a redirect.
 func accountsRedirect(req *http.Request) string {
+	q := url.Values{}
 	if showArchived(req) {
-		return "/accounts?show=archived"
+		q.Set("show", "archived")
 	}
-	return "/accounts"
+	if t := accountTypeFilter(req); t != "" {
+		q.Set("type", t)
+	}
+	if len(q) == 0 {
+		return "/accounts"
+	}
+	return "/accounts?" + q.Encode()
 }
 
 // balanceLabel names the balance an account type carries. It is presentation
@@ -695,6 +702,21 @@ func balanceLabel(t account.AccountType) string {
 	return "Saldo em caixa"
 }
 
+// accountTypeFilter reads the optional account-type filter from "?type=…" (GET)
+// or a "type" form field (POST). An empty or unknown value means "all types".
+func accountTypeFilter(req *http.Request) string {
+	t := req.URL.Query().Get("type")
+	if t == "" {
+		t = req.PostFormValue("type")
+	}
+	switch account.AccountType(t) {
+	case account.Cash, account.Credit, account.Investment:
+		return t
+	default:
+		return ""
+	}
+}
+
 func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, includeArchived bool, errMsg string, code int) {
 	var rows []web.AccountRow
 	accts, err := deps.Accounts.List(req.Context(), includeArchived)
@@ -702,13 +724,29 @@ func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, include
 		logLoad(req, "accounts list", err)
 		errMsg, code = loadErrorMsg, http.StatusInternalServerError
 	}
+	filterType := accountTypeFilter(req)
 	for _, a := range accts {
+		if filterType != "" && string(a.Type) != filterType {
+			continue
+		}
+		// Each account's balance is derived from its ledger on read (AD-2/AD-10).
+		// A per-account read is fine at owner scale; a single account's failure
+		// degrades to "—" without failing the whole list.
+		bal := "—"
+		if b, bErr := deps.Transactions.Balance(req.Context(), a.ID); bErr != nil {
+			logLoad(req, "account balance", bErr)
+		} else if a.Type == account.Credit {
+			bal = domain.AmountOwed(b).Display()
+		} else {
+			bal = b.Display()
+		}
 		rows = append(rows, web.AccountRow{
 			ID:           a.ID,
 			Name:         a.Name,
 			Type:         string(a.Type),
 			Currency:     string(a.Currency),
 			BalanceLabel: balanceLabel(a.Type),
+			Balance:      bal,
 			Archived:     a.Archived,
 		})
 	}
@@ -719,7 +757,7 @@ func renderAccounts(deps Deps, w http.ResponseWriter, req *http.Request, include
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.AccountsPage(shellData(deps, req.Context(), "accounts"), rows, types, codes, includeArchived, errMsg).Render(req.Context(), w)
+	_ = web.AccountsPage(shellData(deps, req.Context(), "accounts"), rows, types, codes, includeArchived, filterType, errMsg).Render(req.Context(), w)
 }
 
 func accountDetail(deps Deps) http.HandlerFunc {

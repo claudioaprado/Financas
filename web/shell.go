@@ -1,9 +1,29 @@
 package web
 
-import "strconv"
+import (
+	"net/url"
+	"strconv"
+)
 
 // accountID renders an account's numeric id as a string for use in form fields.
 func accountID(id int64) string { return strconv.FormatInt(id, 10) }
+
+// AccountsListHref builds the /accounts URL preserving the type filter and the
+// archived-view toggle, so the "Mostrar/Ocultar arquivadas" links don't drop the
+// active filter.
+func AccountsListHref(selectedType string, showArchived bool) string {
+	q := url.Values{}
+	if showArchived {
+		q.Set("show", "archived")
+	}
+	if selectedType != "" {
+		q.Set("type", selectedType)
+	}
+	if len(q) == 0 {
+		return "/accounts"
+	}
+	return "/accounts?" + q.Encode()
+}
 
 // itoa renders an int for an SVG coordinate attribute (Story 5.3 chart).
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -247,16 +267,33 @@ type RateRow struct {
 }
 
 // AccountRow is one account formatted for display. BalanceLabel names the
-// balance the account's type carries ("Cash balance" for cash/investment,
-// "Balance owed" for credit); the value itself is derived from the transaction
-// ledger in later epics (AD-2), so it renders as a placeholder for now.
+// balance the account's type carries ("Saldo em caixa" for cash/investment,
+// "Saldo devedor" for credit); Balance is that value derived from the
+// transaction ledger on read (AD-2/AD-10), already pt-BR formatted, or "—" if it
+// could not be computed.
 type AccountRow struct {
 	ID           int64
 	Name         string
 	Type         string
 	Currency     string
 	BalanceLabel string
+	Balance      string
 	Archived     bool
+}
+
+// AccountTypeName renders an account type in pt-BR for display. An unknown value
+// is returned unchanged (defensive — the service is the type authority).
+func AccountTypeName(t string) string {
+	switch t {
+	case "cash":
+		return "Caixa"
+	case "credit":
+		return "Crédito"
+	case "investment":
+		return "Investimento"
+	default:
+		return t
+	}
 }
 
 // TxRow is one transaction formatted for an account's register. Amount is the
