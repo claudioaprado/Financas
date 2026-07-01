@@ -473,8 +473,12 @@ func (s *stubCategories) Delete(_ context.Context, id int64, force bool) error {
 }
 
 // stubImports is an in-memory Imports for handler tests. It uses the real (pure)
-// importer.Parse and records committed content; every OK row counts as "new".
-type stubImports struct{ committed []string }
+// importer.Parse / importer.ParseOFX and records committed content per format;
+// every OK row counts as "new" (OFX rows without a FITID also carry a warning).
+type stubImports struct {
+	committed    []string
+	committedOFX []string
+}
 
 func (s *stubImports) Preview(_ context.Context, _ int64, content string) (importer.Result, error) {
 	return stubImportResult(content), nil
@@ -483,6 +487,15 @@ func (s *stubImports) Preview(_ context.Context, _ int64, content string) (impor
 func (s *stubImports) Commit(_ context.Context, _ int64, content string) (importer.Result, error) {
 	s.committed = append(s.committed, content)
 	return stubImportResult(content), nil
+}
+
+func (s *stubImports) PreviewOFX(_ context.Context, _ int64, content string) (importer.Result, error) {
+	return stubImportResultOFX(content), nil
+}
+
+func (s *stubImports) CommitOFX(_ context.Context, _ int64, content string) (importer.Result, error) {
+	s.committedOFX = append(s.committedOFX, content)
+	return stubImportResultOFX(content), nil
 }
 
 func stubImportResult(content string) importer.Result {
@@ -495,6 +508,27 @@ func stubImportResult(content string) importer.Result {
 		} else {
 			pr.Status = "error"
 			res.Errors++
+		}
+		res.Rows = append(res.Rows, pr)
+	}
+	return res
+}
+
+func stubImportResultOFX(content string) importer.Result {
+	res := importer.Result{AccountName: "Acc", Currency: "USD"}
+	for _, p := range importer.ParseOFX(content) {
+		pr := importer.PreviewRow{ParsedRow: p}
+		switch {
+		case !p.OK:
+			pr.Status = "error"
+			res.Errors++
+		case p.FITID == "":
+			pr.Status = "new"
+			pr.Warning = "no FITID"
+			res.New++
+		default:
+			pr.Status = "new"
+			res.New++
 		}
 		res.Rows = append(res.Rows, pr)
 	}
@@ -1979,6 +2013,58 @@ func TestImportPreviewAndCommit(t *testing.T) {
 	}
 	if len(imp.committed) != 1 || imp.committed[0] != content {
 		t.Errorf("commit should have recorded the content; got %v", imp.committed)
+	}
+}
+
+// TestImportOFXFormat covers the OFX branch: format=ofx routes to PreviewOFX/
+// CommitOFX, the preview surfaces the no-FITID warning, and commit records the
+// content on the OFX side (not the tab side).
+func TestImportOFXFormat(t *testing.T) {
+	deps := testDeps(true, nil)
+	imp := &stubImports{}
+	deps.Imports = imp
+	router := NewRouter(deps)
+
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	recAcc := httptest.NewRecorder()
+	mk := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader("name=Imp&type=cash&currency=USD"))
+	mk.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recAcc, withCookie(mk, cookie))
+
+	content := "<OFX><BANKTRANLIST>\n" +
+		"<STMTTRN><DTPOSTED>20240301<TRNAMT>100.00<FITID>Z1<NAME>WithFitid</STMTTRN>\n" +
+		"<STMTTRN><DTPOSTED>20240302<TRNAMT>-9.00<NAME>NoFitid</STMTTRN>\n" +
+		"</BANKTRANLIST></OFX>\n"
+	body := url.Values{"content": {content}, "format": {"ofx"}}.Encode()
+
+	// Preview: both rows new, the no-FITID row shows the warning.
+	recPrev := httptest.NewRecorder()
+	prev := httptest.NewRequest(http.MethodPost, "/accounts/1/import/preview", strings.NewReader(body))
+	prev.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recPrev, withCookie(prev, cookie))
+	pb := recPrev.Body.String()
+	for _, want := range []string{"WithFitid", "NoFitid", "sem FITID", "Confirmar 2 novas linhas"} {
+		if !strings.Contains(pb, want) {
+			t.Errorf("OFX preview missing %q", want)
+		}
+	}
+
+	// Commit routes to the OFX side, not the tab side.
+	recCommit := httptest.NewRecorder()
+	commit := httptest.NewRequest(http.MethodPost, "/accounts/1/import/commit", strings.NewReader(body))
+	commit.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recCommit, withCookie(commit, cookie))
+	if recCommit.Code != http.StatusSeeOther || recCommit.Header().Get("Location") != "/accounts/1" {
+		t.Fatalf("ofx commit = %d -> %q, want 303 -> /accounts/1", recCommit.Code, recCommit.Header().Get("Location"))
+	}
+	if len(imp.committedOFX) != 1 || imp.committedOFX[0] != content {
+		t.Errorf("commit should have recorded OFX content; got %v", imp.committedOFX)
+	}
+	if len(imp.committed) != 0 {
+		t.Errorf("OFX commit must not touch the tab path; got %v", imp.committed)
 	}
 }
 

@@ -376,6 +376,7 @@ type ImportRow struct {
 	Amount      string
 	Status      string // "new" | "duplicate" | "error"
 	Reason      string
+	Warning     string // non-empty when the row imports with a caveat (OFX row w/o FITID)
 	Raw         string
 }
 

@@ -20,6 +20,10 @@ type Querier interface {
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
 	CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (int64, error)
+	// OFX import (FR-16): an Income/Expense row carrying the bank's FITID (or NULL
+	// when the STMTTRN has none). category_id and import_hash default NULL — OFX
+	// dedup is FITID-only, never the tab importer's content hash.
+	CreateOFXTransaction(ctx context.Context, arg CreateOFXTransactionParams) (int64, error)
 	CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
@@ -45,6 +49,7 @@ type Querier interface {
 	// date-to-date comparison (no sub-day/timezone boundary flapping when an instant
 	// is passed).
 	LatestPrices(ctx context.Context, dollar_1 time.Time) ([]LatestPricesRow, error)
+	ListAccountFitids(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error)
 	ListAccountImportHashes(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error)
 	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)

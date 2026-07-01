@@ -31,6 +31,7 @@ type ParsedRow struct {
 	Description string
 	Amount      decimal.Decimal // non-negative magnitude
 	Type        string          // "income" | "expense"
+	FITID       string          // OFX bank transaction id (empty for tab imports / OFX rows without one)
 	OK          bool
 	Reason      string
 }

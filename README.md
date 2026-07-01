@@ -232,6 +232,15 @@ duplicate, or error (with a reason; a bad row never aborts the batch) — then
 commit the new ones. Re-importing the same file is **idempotent**: a per-row hash
 of `(account_id, date, description, value)` is stored, so nothing is duplicated.
 
+You can also import an **OFX** bank/credit-card statement (choose the format on
+the same page). Each `STMTTRN` becomes an Income/Expense in the account's currency
+(`TRNAMT` sign → type, `DTPOSTED` → date, `NAME`/`MEMO` → description). OFX dedup
+is **FITID-only**, scoped to the account: re-importing a statement skips rows whose
+bank id (`FITID`) is already present — never by matching date/description/value, so
+two legitimate identical transactions are both kept. A `STMTTRN` without a FITID is
+imported as new and flagged (re-importing it may duplicate). Malformed records are
+reported per-row without aborting the batch; the commit writes in one transaction.
+
 For local work, bring up just the database (published on host **5433** to avoid
 colliding with a native PostgreSQL on 5432):
 

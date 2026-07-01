@@ -1088,19 +1088,27 @@ templ SecuritiesPage(data ShellData, securities []SecurityRow, types []SecurityT
 	}
 }
 
-// ImportPage previews and commits a tab-delimited statement import (Story 3.6).
-// On first load it shows the upload form; after a preview it shows the parsed
-// rows with new/duplicate/error status and a Commit button for the new rows.
-templ ImportPage(data ShellData, acctID int64, accountName, currency string, content string, rows []ImportRow, newCount int, hasResult bool, errMsg string) {
+// ImportPage previews and commits a statement import — tab-delimited (Story 3.6)
+// or OFX (Story 7.1), chosen via the format selector. On first load it shows the
+// upload form; after a preview it shows the parsed rows with new/duplicate/error
+// status (and a "no FITID" caveat on OFX rows without one) and a Commit button.
+templ ImportPage(data ShellData, acctID int64, accountName, currency, format string, content string, rows []ImportRow, newCount int, hasResult bool, errMsg string) {
 	@Shell(data) {
 		<section class="max-w-3xl rounded-card bg-white p-6 shadow-card">
 			<p class="text-sm"><a href={ templ.URL("/accounts/" + accountID(acctID)) } class="text-accent hover:underline">← { accountName }</a></p>
 			<h1 class="mt-1 text-2xl font-bold">Importar transações</h1>
-			<p class="mt-1 text-sm text-muted">Formato separado por tabulação: <code>data⇥descrição⇥valor</code>, uma por linha. Datas <code>dd/mm/aa</code> ou <code>dd/mm/aaaa</code>; valores no formato brasileiro (p.ex. <code>1.234,56</code>). Valor negativo é despesa, positivo é receita, em { currency }. Reimportar o mesmo arquivo não adiciona nada novo.</p>
+			<p class="mt-1 text-sm text-muted">Valor negativo é despesa, positivo é receita, em { currency }. <strong>Tabulação:</strong> <code>data⇥descrição⇥valor</code> (datas <code>dd/mm/aaaa</code>, números <code>1.234,56</code>); reimportar o mesmo arquivo não duplica. <strong>OFX:</strong> extrato do banco; a deduplicação usa o identificador do banco (FITID), então reimportar não duplica — linhas sem FITID são importadas e sinalizadas.</p>
 			if errMsg != "" {
 				<p class="mt-3 text-loss">{ errMsg }</p>
 			}
 			<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/preview") } enctype="multipart/form-data" class="mt-4 space-y-3">
+				<div>
+					<label class="block text-xs" for="format">Formato</label>
+					<select id="format" name="format" class="rounded border px-2 py-1 text-sm">
+						<option value="tab" selected?={ format != "ofx" }>Separado por tabulação</option>
+						<option value="ofx" selected?={ format == "ofx" }>OFX (extrato bancário)</option>
+					</select>
+				</div>
 				<div>
 					<label class="block text-xs" for="file">Arquivo</label>
 					<input id="file" name="file" type="file" class="text-sm"/>
@@ -1141,6 +1149,9 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 											<span class="text-muted">duplicado</span>
 										} else {
 											<span class="text-gain">novo</span>
+											if r.Warning != "" {
+												<span class="text-loss" title="Reimportar esta linha pode duplicá-la"> · sem FITID</span>
+											}
 										}
 									</td>
 								}
@@ -1151,6 +1162,7 @@ templ ImportPage(data ShellData, acctID int64, accountName, currency string, con
 				if newCount > 0 {
 					<form method="post" action={ templ.URL("/accounts/" + accountID(acctID) + "/import/commit") } class="mt-4">
 						<input type="hidden" name="content" value={ content }/>
+						<input type="hidden" name="format" value={ format }/>
 						<button class="rounded bg-slate-900 px-3 py-1.5 text-white" type="submit">Confirmar { countLabel(int64(newCount)) } novas linhas</button>
 					</form>
 				} else {

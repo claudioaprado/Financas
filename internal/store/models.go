@@ -79,4 +79,5 @@ type Transaction struct {
 	Quantity      decimal.Decimal
 	Price         decimal.Decimal
 	Fees          decimal.Decimal
+	Fitid         pgtype.Text
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
@@ -601,3 +602,62 @@ func TestRestoreAtomicReject(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// TestRestorePreservesFitid (Story 7.1): the OFX dedup key is authored state on
+// the transaction row, so export→restore must carry it — otherwise a restore
+// silently drops idempotency and a re-imported OFX would duplicate. Also asserts
+// a pre-7.1 export (no fitid field) restores as NULL (forward-tolerant).
+func TestRestorePreservesFitid(t *testing.T) {
+	ctx := context.Background()
+	poolA := newPool(t)
+
+	cash, err := account.New(poolA).Create(ctx, "Cash", account.Cash, money.USD)
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	// An OFX-imported income row carrying a FITID (inserted via the store directly).
+	if _, err := store.New(poolA).CreateOFXTransaction(ctx, store.CreateOFXTransactionParams{
+		Type:        "income",
+		ToAccountID: pgtype.Int8{Int64: cash.ID, Valid: true},
+		FromAmount:  req("0"),
+		ToAmount:    req("100"),
+		OccurredOn:  dt(t, "2026-06-03"),
+		Description: "ofx pay",
+		Fitid:       pgtype.Text{String: "BANK-FIT-1", Valid: true},
+	}); err != nil {
+		t.Fatalf("create ofx tx: %v", err)
+	}
+
+	srcExp, err := New(poolA).Export(ctx)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if len(srcExp.Transactions) != 1 || srcExp.Transactions[0].Fitid == nil || *srcExp.Transactions[0].Fitid != "BANK-FIT-1" {
+		t.Fatalf("export did not carry fitid: %+v", srcExp.Transactions)
+	}
+
+	// Round-trip into a fresh instance: fitid survives.
+	raw, _ := json.Marshal(srcExp)
+	poolB := newPool(t)
+	if _, err := New(poolB).Restore(ctx, raw); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	dstExp, _ := New(poolB).Export(ctx)
+	if len(dstExp.Transactions) != 1 || dstExp.Transactions[0].Fitid == nil || *dstExp.Transactions[0].Fitid != "BANK-FIT-1" {
+		t.Errorf("restored export lost fitid: %+v", dstExp.Transactions)
+	}
+
+	// Backward compatibility: an export that omits fitid (pre-7.1) restores as NULL.
+	old := srcExp
+	old.Transactions = []TransactionDTO{srcExp.Transactions[0]}
+	old.Transactions[0].Fitid = nil // omitempty ⇒ the field is absent in the JSON
+	oldRaw, _ := json.Marshal(old)
+	poolC := newPool(t)
+	if _, err := New(poolC).Restore(ctx, oldRaw); err != nil {
+		t.Fatalf("restore old export: %v", err)
+	}
+	cExp, _ := New(poolC).Export(ctx)
+	if len(cExp.Transactions) != 1 || cExp.Transactions[0].Fitid != nil {
+		t.Errorf("pre-7.1 export should restore fitid as NULL: %+v", cExp.Transactions)
+	}
+}

@@ -46,10 +46,46 @@ func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImpor
 	return result.RowsAffected(), nil
 }
 
+const createOFXTransaction = `-- name: CreateOFXTransaction :execrows
+INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, fitid)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type CreateOFXTransactionParams struct {
+	Type          string
+	FromAccountID pgtype.Int8
+	ToAccountID   pgtype.Int8
+	FromAmount    decimal.Decimal
+	ToAmount      decimal.Decimal
+	OccurredOn    time.Time
+	Description   string
+	Fitid         pgtype.Text
+}
+
+// OFX import (FR-16): an Income/Expense row carrying the bank's FITID (or NULL
+// when the STMTTRN has none). category_id and import_hash default NULL — OFX
+// dedup is FITID-only, never the tab importer's content hash.
+func (q *Queries) CreateOFXTransaction(ctx context.Context, arg CreateOFXTransactionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createOFXTransaction,
+		arg.Type,
+		arg.FromAccountID,
+		arg.ToAccountID,
+		arg.FromAmount,
+		arg.ToAmount,
+		arg.OccurredOn,
+		arg.Description,
+		arg.Fitid,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transaction (type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, category_id, security_id, quantity, price, fees)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
+RETURNING id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
 `
 
 type CreateTransactionParams struct {
@@ -99,6 +135,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.Quantity,
 		&i.Price,
 		&i.Fees,
+		&i.Fitid,
 	)
 	return i, err
 }
@@ -113,6 +150,32 @@ func (q *Queries) DeleteTransaction(ctx context.Context, id int64) (int64, error
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listAccountFitids = `-- name: ListAccountFitids :many
+SELECT fitid
+FROM transaction
+WHERE fitid IS NOT NULL AND (from_account_id = $1 OR to_account_id = $1)
+`
+
+func (q *Queries) ListAccountFitids(ctx context.Context, fromAccountID pgtype.Int8) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, listAccountFitids, fromAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var fitid pgtype.Text
+		if err := rows.Scan(&fitid); err != nil {
+			return nil, err
+		}
+		items = append(items, fitid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAccountImportHashes = `-- name: ListAccountImportHashes :many
@@ -142,7 +205,7 @@ func (q *Queries) ListAccountImportHashes(ctx context.Context, fromAccountID pgt
 }
 
 const listAccountTransactions = `-- name: ListAccountTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
 FROM transaction
 WHERE from_account_id = $1 OR to_account_id = $1
 ORDER BY occurred_on DESC, id DESC
@@ -173,6 +236,7 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 			&i.Quantity,
 			&i.Price,
 			&i.Fees,
+			&i.Fitid,
 		); err != nil {
 			return nil, err
 		}
@@ -185,7 +249,7 @@ func (q *Queries) ListAccountTransactions(ctx context.Context, fromAccountID pgt
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees
+SELECT id, type, from_account_id, to_account_id, from_amount, to_amount, occurred_on, description, created_at, category_id, import_hash, security_id, quantity, price, fees, fitid
 FROM transaction
 ORDER BY occurred_on DESC, id DESC
 `
@@ -215,6 +279,7 @@ func (q *Queries) ListTransactions(ctx context.Context) ([]Transaction, error) {
 			&i.Quantity,
 			&i.Price,
 			&i.Fees,
+			&i.Fitid,
 		); err != nil {
 			return nil, err
 		}

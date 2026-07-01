@@ -119,6 +119,7 @@ type TransactionDTO struct {
 	Quantity      string  `json:"quantity"`
 	Price         string  `json:"price"`
 	Fees          string  `json:"fees"`
+	Fitid         *string `json:"fitid,omitempty"` // OFX dedup key; absent in pre-7.1 exports ⇒ NULL
 }
 
 // Service assembles the authored-data export.
@@ -259,6 +260,7 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 			Quantity:      t.Quantity.String(),
 			Price:         t.Price.String(),
 			Fees:          t.Fees.String(),
+			Fitid:         textPtr(t.Fitid),
 		})
 	}
 
@@ -449,7 +451,7 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 			FromAccountID: toInt8(t.FromAccountID), ToAccountID: toInt8(t.ToAccountID),
 			FromAmount: fromAmt, ToAmount: toAmt, OccurredOn: occ, Description: t.Description, CreatedAt: ca,
 			CategoryID: toInt8(t.CategoryID), ImportHash: toText(t.ImportHash), SecurityID: toInt8(t.SecurityID),
-			Quantity: qty, Price: price, Fees: fees,
+			Quantity: qty, Price: price, Fees: fees, Fitid: toText(t.Fitid),
 		})
 	}
 

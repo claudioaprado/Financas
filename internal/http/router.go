@@ -115,11 +115,13 @@ type Securities interface {
 	List(ctx context.Context) ([]security.Security, error)
 }
 
-// Imports previews and commits tab-delimited file imports. Defined here
-// (consumer side) and implemented by service/importer.
+// Imports previews and commits file imports — tab-delimited (Story 3.6) or OFX
+// (Story 7.1). Defined here (consumer side) and implemented by service/importer.
 type Imports interface {
 	Preview(ctx context.Context, accountID int64, content string) (importer.Result, error)
 	Commit(ctx context.Context, accountID int64, content string) (importer.Result, error)
+	PreviewOFX(ctx context.Context, accountID int64, content string) (importer.Result, error)
+	CommitOFX(ctx context.Context, accountID int64, content string) (importer.Result, error)
 }
 
 // Valuation derives the cross-account portfolio & Net Worth in the Display
@@ -809,7 +811,7 @@ func importForm(deps Deps) http.HandlerFunc {
 			http.NotFound(w, req)
 			return
 		}
-		renderImport(deps, w, req, acctID, "", nil, "", http.StatusOK)
+		renderImport(deps, w, req, acctID, "tab", "", nil, "", http.StatusOK)
 	}
 }
 
@@ -821,13 +823,29 @@ func importPreview(deps Deps) http.HandlerFunc {
 			return
 		}
 		content := readImportContent(req)
-		res, err := deps.Imports.Preview(req.Context(), acctID, content)
+		format := importFormat(req.FormValue("format"))
+		var res importer.Result
+		var err error
+		if format == "ofx" {
+			res, err = deps.Imports.PreviewOFX(req.Context(), acctID, content)
+		} else {
+			res, err = deps.Imports.Preview(req.Context(), acctID, content)
+		}
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, problemMsg(req, "Não foi possível ler a importação. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, format, content, nil, problemMsg(req, "Não foi possível ler a importação. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
-		renderImport(deps, w, req, acctID, content, &res, "", http.StatusOK)
+		renderImport(deps, w, req, acctID, format, content, &res, "", http.StatusOK)
 	}
+}
+
+// importFormat normalizes the import-format form value to "tab" (default) or
+// "ofx".
+func importFormat(v string) string {
+	if v == "ofx" {
+		return "ofx"
+	}
+	return "tab"
 }
 
 func importCommit(deps Deps) http.HandlerFunc {
@@ -842,9 +860,16 @@ func importCommit(deps Deps) http.HandlerFunc {
 			return
 		}
 		content := req.PostFormValue("content")
-		res, err := deps.Imports.Commit(req.Context(), acctID, content)
+		format := importFormat(req.PostFormValue("format"))
+		var res importer.Result
+		var err error
+		if format == "ofx" {
+			res, err = deps.Imports.CommitOFX(req.Context(), acctID, content)
+		} else {
+			res, err = deps.Imports.Commit(req.Context(), acctID, content)
+		}
 		if err != nil {
-			renderImport(deps, w, req, acctID, content, nil, problemMsg(req, "Não foi possível importar. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
+			renderImport(deps, w, req, acctID, format, content, nil, problemMsg(req, "Não foi possível importar. Verifique o arquivo e tente novamente.", err), http.StatusBadRequest)
 			return
 		}
 		_ = res
@@ -866,7 +891,7 @@ func readImportContent(req *http.Request) string {
 	return req.FormValue("content")
 }
 
-func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID int64, content string, res *importer.Result, errMsg string, code int) {
+func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID int64, format, content string, res *importer.Result, errMsg string, code int) {
 	acct, err := deps.Accounts.Get(req.Context(), acctID)
 	if err != nil {
 		// A genuinely unknown id is a 404; a DB outage is a load error (500) — never
@@ -885,7 +910,7 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 	if res != nil {
 		newCount = res.New
 		for _, r := range res.Rows {
-			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Raw: r.Raw}
+			ir := web.ImportRow{Line: r.Line, Description: r.Description, Status: r.Status, Reason: r.Reason, Warning: r.Warning, Raw: r.Raw}
 			if r.OK {
 				ir.Date = r.Date.Format("02/01/2006")
 				ir.Type = r.Type
@@ -900,7 +925,7 @@ func renderImport(deps Deps, w http.ResponseWriter, req *http.Request, acctID in
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
-	_ = web.ImportPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Currency), content, rows, newCount, hasResult, errMsg).Render(req.Context(), w)
+	_ = web.ImportPage(shellData(deps, req.Context(), "accounts"), acctID, acct.Name, string(acct.Currency), format, content, rows, newCount, hasResult, errMsg).Render(req.Context(), w)
 }
 
 func transactionsRegister(deps Deps) http.HandlerFunc {
