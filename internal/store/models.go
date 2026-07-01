@@ -25,6 +25,12 @@ type AppSetting struct {
 	DisplayCurrency string
 }
 
+type AssetCategory struct {
+	ID        int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
 type Budget struct {
 	ID         int64
 	CategoryID int64

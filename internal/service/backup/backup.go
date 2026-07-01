@@ -62,6 +62,14 @@ type Export struct {
 	Recurring       []RecurringDTO      `json:"recurring"`
 	Tags            []TagDTO            `json:"tags"`
 	TransactionTags []TransactionTagDTO `json:"transaction_tags"`
+	AssetCategories []AssetCategoryDTO  `json:"asset_categories"`
+}
+
+// AssetCategoryDTO mirrors the asset_category table (owner-defined security classes).
+type AssetCategoryDTO struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // AccountDTO mirrors the account table at full fidelity (PK + created_at).
@@ -230,6 +238,7 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 		Recurring:       []RecurringDTO{},
 		Tags:            []TagDTO{},
 		TransactionTags: []TransactionTagDTO{},
+		AssetCategories: []AssetCategoryDTO{},
 	}
 
 	accounts, err := q.ExportAccounts(ctx)
@@ -381,6 +390,14 @@ func (s *Service) Export(ctx context.Context) (Export, error) {
 		exp.TransactionTags = append(exp.TransactionTags, TransactionTagDTO{TransactionID: tt.TransactionID, TagID: tt.TagID})
 	}
 
+	assetCats, err := q.ExportAssetCategories(ctx)
+	if err != nil {
+		return Export{}, fmt.Errorf("backup: asset categories: %w", err)
+	}
+	for _, c := range assetCats {
+		exp.AssetCategories = append(exp.AssetCategories, AssetCategoryDTO{ID: c.ID, Name: c.Name, CreatedAt: timestamp(c.CreatedAt)})
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Export{}, fmt.Errorf("backup: commit: %w", err)
 	}
@@ -447,6 +464,7 @@ type RestoreSummary struct {
 	Recurring       int
 	Tags            int
 	TransactionTags int
+	AssetCategories int
 }
 
 // Restore rebuilds the instance from a 6.1 export (FR-15). It is a replace-all
@@ -651,6 +669,14 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 	for _, tt := range exp.TransactionTags {
 		txnTags = append(txnTags, store.RestoreInsertTransactionTagParams{TransactionID: tt.TransactionID, TagID: tt.TagID})
 	}
+	assetCategories := make([]store.RestoreInsertAssetCategoryParams, 0, len(exp.AssetCategories))
+	for _, c := range exp.AssetCategories {
+		ca, err := toTimestamp(c.CreatedAt)
+		if err != nil {
+			return RestoreSummary{}, err
+		}
+		assetCategories = append(assetCategories, store.RestoreInsertAssetCategoryParams{ID: c.ID, Name: c.Name, CreatedAt: ca})
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -667,6 +693,7 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 		q.RestoreDeleteBudgets, q.RestoreDeleteCategoryRules, q.RestoreDeleteRecurring,
 		q.RestoreDeleteTransactions, q.RestoreDeletePrices, q.RestoreDeleteExchangeRates,
 		q.RestoreDeleteSecurities, q.RestoreDeleteCategories, q.RestoreDeleteAccounts,
+		q.RestoreDeleteAssetCategories,
 	} {
 		if err := del(ctx); err != nil {
 			return RestoreSummary{}, fmt.Errorf("backup: clear data: %w", err)
@@ -676,6 +703,11 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 	// Insert parent→child, preserving ids and created_at. A foreign-key or other
 	// constraint violation here (a dangling/partial file) aborts the tx → the
 	// deferred rollback leaves the instance unchanged → reported as malformed.
+	for _, p := range assetCategories {
+		if err := q.RestoreInsertAssetCategory(ctx, p); err != nil {
+			return RestoreSummary{}, fmt.Errorf("%w: restoring asset categories: %v", ErrMalformed, err)
+		}
+	}
 	for _, p := range accounts {
 		if err := q.RestoreInsertAccount(ctx, p); err != nil {
 			return RestoreSummary{}, fmt.Errorf("%w: restoring accounts: %v", ErrMalformed, err)
@@ -740,7 +772,7 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 		q.RestoreResetAccountSeq, q.RestoreResetCategorySeq, q.RestoreResetSecuritySeq,
 		q.RestoreResetExchangeRateSeq, q.RestoreResetPriceSeq, q.RestoreResetTransactionSeq,
 		q.RestoreResetBudgetSeq, q.RestoreResetCategoryRuleSeq, q.RestoreResetRecurringSeq,
-		q.RestoreResetTagSeq,
+		q.RestoreResetTagSeq, q.RestoreResetAssetCategorySeq,
 	} {
 		if err := reset(ctx); err != nil {
 			return RestoreSummary{}, fmt.Errorf("backup: reset sequence: %w", err)
@@ -766,6 +798,7 @@ func (s *Service) Restore(ctx context.Context, raw []byte) (RestoreSummary, erro
 		Recurring:       len(recurring),
 		Tags:            len(tags),
 		TransactionTags: len(txnTags),
+		AssetCategories: len(assetCategories),
 	}, nil
 }
 

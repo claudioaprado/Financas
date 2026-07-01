@@ -194,3 +194,22 @@ SELECT setval(pg_get_serial_sequence('recurring', 'id'),
 SELECT setval(pg_get_serial_sequence('tag', 'id'),
               COALESCE((SELECT MAX(id) FROM tag), 1),
               (SELECT MAX(id) FROM tag) IS NOT NULL);
+
+-- Asset categories (owner-defined security classes). An independent authored
+-- table with no FKs yet, so it round-trips like any other parent.
+
+-- name: ExportAssetCategories :many
+SELECT id, name, created_at FROM asset_category ORDER BY id;
+
+-- name: RestoreDeleteAssetCategories :exec
+DELETE FROM asset_category;
+
+-- name: RestoreInsertAssetCategory :exec
+INSERT INTO asset_category (id, name, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3);
+
+-- name: RestoreResetAssetCategorySeq :exec
+SELECT setval(pg_get_serial_sequence('asset_category', 'id'),
+              COALESCE((SELECT MAX(id) FROM asset_category), 1),
+              (SELECT MAX(id) FROM asset_category) IS NOT NULL);

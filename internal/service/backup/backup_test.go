@@ -17,6 +17,7 @@ import (
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/assetcategory"
 	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
 	"github.com/claudioaprado/financas/internal/service/categoryrule"
@@ -321,7 +322,7 @@ func TestExportEmptyInstance(t *testing.T) {
 	if exp.Accounts == nil || exp.Categories == nil || exp.Securities == nil ||
 		exp.ExchangeRates == nil || exp.Prices == nil || exp.Transactions == nil ||
 		exp.Budgets == nil || exp.CategoryRules == nil || exp.Recurring == nil ||
-		exp.Tags == nil || exp.TransactionTags == nil {
+		exp.Tags == nil || exp.TransactionTags == nil || exp.AssetCategories == nil {
 		t.Errorf("a slice is nil on empty instance: %+v", exp)
 	}
 	if len(exp.Accounts) != 0 || len(exp.Transactions) != 0 {
@@ -382,6 +383,10 @@ func seedSample(t *testing.T, pool *pgxpool.Pool) int64 {
 	}
 	if _, err := txns.Record(ctx, cashUSD.ID, transaction.Expense, req("40.25"), dt(t, "2026-06-04"), "lunch", 0); err != nil {
 		t.Fatalf("expense: %v", err)
+	}
+	// An owner-defined asset category must survive the round-trip too.
+	if _, err := assetcategory.New(pool).Create(ctx, "Ações BR"); err != nil {
+		t.Fatalf("asset category: %v", err)
 	}
 	// Phase-2 authored tables (Epics 8-10) must survive the round-trip too.
 	if err := budget.New(pool).Set(ctx, salary.ID, req("2000")); err != nil {
@@ -454,13 +459,14 @@ func TestRestoreRoundTrip(t *testing.T) {
 		sum.ExchangeRates != len(srcExp.ExchangeRates) || sum.Categories != len(srcExp.Categories) ||
 		sum.Budgets != len(srcExp.Budgets) || sum.CategoryRules != len(srcExp.CategoryRules) ||
 		sum.Recurring != len(srcExp.Recurring) || sum.Tags != len(srcExp.Tags) ||
-		sum.TransactionTags != len(srcExp.TransactionTags) {
+		sum.TransactionTags != len(srcExp.TransactionTags) ||
+		sum.AssetCategories != len(srcExp.AssetCategories) {
 		t.Fatalf("summary %+v does not match source counts", sum)
 	}
-	// The Phase-2 tables must be non-empty in the fixture, else the round-trip
-	// below would vacuously "pass" without exercising them.
+	// The Phase-2 tables + asset categories must be non-empty in the fixture, else
+	// the round-trip below would vacuously "pass" without exercising them.
 	if len(srcExp.Budgets) == 0 || len(srcExp.CategoryRules) == 0 || len(srcExp.Recurring) == 0 ||
-		len(srcExp.Tags) == 0 || len(srcExp.TransactionTags) == 0 {
+		len(srcExp.Tags) == 0 || len(srcExp.TransactionTags) == 0 || len(srcExp.AssetCategories) == 0 {
 		t.Fatalf("fixture missing Phase-2 rows: %+v", sum)
 	}
 

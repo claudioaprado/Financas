@@ -51,6 +51,33 @@ func (q *Queries) ExportAccounts(ctx context.Context) ([]Account, error) {
 	return items, nil
 }
 
+const exportAssetCategories = `-- name: ExportAssetCategories :many
+
+SELECT id, name, created_at FROM asset_category ORDER BY id
+`
+
+// Asset categories (owner-defined security classes). An independent authored
+// table with no FKs yet, so it round-trips like any other parent.
+func (q *Queries) ExportAssetCategories(ctx context.Context) ([]AssetCategory, error) {
+	rows, err := q.db.Query(ctx, exportAssetCategories)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AssetCategory{}
+	for rows.Next() {
+		var i AssetCategory
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const exportBudgets = `-- name: ExportBudgets :many
 
 SELECT id, category_id, amount, created_at FROM budget ORDER BY id
@@ -378,6 +405,15 @@ func (q *Queries) RestoreDeleteAccounts(ctx context.Context) error {
 	return err
 }
 
+const restoreDeleteAssetCategories = `-- name: RestoreDeleteAssetCategories :exec
+DELETE FROM asset_category
+`
+
+func (q *Queries) RestoreDeleteAssetCategories(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreDeleteAssetCategories)
+	return err
+}
+
 const restoreDeleteBudgets = `-- name: RestoreDeleteBudgets :exec
 DELETE FROM budget
 `
@@ -499,6 +535,23 @@ func (q *Queries) RestoreInsertAccount(ctx context.Context, arg RestoreInsertAcc
 		arg.Archived,
 		arg.CreatedAt,
 	)
+	return err
+}
+
+const restoreInsertAssetCategory = `-- name: RestoreInsertAssetCategory :exec
+INSERT INTO asset_category (id, name, created_at)
+OVERRIDING SYSTEM VALUE
+VALUES ($1, $2, $3)
+`
+
+type RestoreInsertAssetCategoryParams struct {
+	ID        int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) RestoreInsertAssetCategory(ctx context.Context, arg RestoreInsertAssetCategoryParams) error {
+	_, err := q.db.Exec(ctx, restoreInsertAssetCategory, arg.ID, arg.Name, arg.CreatedAt)
 	return err
 }
 
@@ -785,6 +838,17 @@ SELECT setval(pg_get_serial_sequence('account', 'id'),
 
 func (q *Queries) RestoreResetAccountSeq(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, restoreResetAccountSeq)
+	return err
+}
+
+const restoreResetAssetCategorySeq = `-- name: RestoreResetAssetCategorySeq :exec
+SELECT setval(pg_get_serial_sequence('asset_category', 'id'),
+              COALESCE((SELECT MAX(id) FROM asset_category), 1),
+              (SELECT MAX(id) FROM asset_category) IS NOT NULL)
+`
+
+func (q *Queries) RestoreResetAssetCategorySeq(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, restoreResetAssetCategorySeq)
 	return err
 }
 

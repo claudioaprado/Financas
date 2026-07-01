@@ -28,6 +28,7 @@ import (
 	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/assetcategory"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
@@ -115,6 +116,15 @@ type Categories interface {
 	Delete(ctx context.Context, id int64, force bool) error
 }
 
+// AssetCategories manages the owner's asset categories (owner-defined security
+// classes). Defined here (consumer side) and implemented by service/assetcategory.
+type AssetCategories interface {
+	Create(ctx context.Context, name string) (assetcategory.Category, error)
+	List(ctx context.Context) ([]assetcategory.Category, error)
+	Rename(ctx context.Context, id int64, name string) error
+	Delete(ctx context.Context, id int64) error
+}
+
 // CategoryRules manages auto-categorization rules (Story 7.2 / FR-17). Defined
 // here (consumer side) and implemented by service/categoryrule.
 type CategoryRules interface {
@@ -187,24 +197,25 @@ type Backup interface {
 
 // Deps are the collaborators the router needs, injected by main.
 type Deps struct {
-	Sessions      *scs.SessionManager
-	Auth          Authenticator
-	Ready         ReadyCheck
-	Settings      Settings
-	ExchangeRates ExchangeRates
-	Prices        Prices
-	Accounts      Accounts
-	Transactions  Transactions
-	Categories    Categories
-	CategoryRules CategoryRules
-	Budgets       Budgets
-	Analytics     Analytics
-	Recurring     Recurring
-	Securities    Securities
-	Imports       Imports
-	Valuation     Valuation
-	Backup        Backup
-	OwnerName     string // shown in the shell greeting (from config)
+	Sessions        *scs.SessionManager
+	Auth            Authenticator
+	Ready           ReadyCheck
+	Settings        Settings
+	ExchangeRates   ExchangeRates
+	Prices          Prices
+	Accounts        Accounts
+	Transactions    Transactions
+	Categories      Categories
+	AssetCategories AssetCategories
+	CategoryRules   CategoryRules
+	Budgets         Budgets
+	Analytics       Analytics
+	Recurring       Recurring
+	Securities      Securities
+	Imports         Imports
+	Valuation       Valuation
+	Backup          Backup
+	OwnerName       string // shown in the shell greeting (from config)
 }
 
 // sessionAuthKey marks an authenticated session.
@@ -273,6 +284,10 @@ func NewRouter(deps Deps) http.Handler {
 		pr.Get("/categories", categoriesPage(deps))
 		pr.Post("/categories", categoriesCreate(deps))
 		pr.Post("/categories/delete", categoriesDelete(deps))
+		pr.Get("/asset-categories", assetCategoriesPage(deps))
+		pr.Post("/asset-categories", assetCategoriesCreate(deps))
+		pr.Post("/asset-categories/rename", assetCategoriesRename(deps))
+		pr.Post("/asset-categories/delete", assetCategoriesDelete(deps))
 		pr.Get("/categories/rules", rulesPage(deps))
 		pr.Post("/categories/rules", rulesCreate(deps))
 		pr.Post("/categories/rules/delete", rulesDelete(deps))
@@ -380,6 +395,13 @@ func knownErrMsg(err error) (string, bool) {
 		return "Esta categoria está em uso por transações.", true
 	case errors.Is(err, category.ErrNotFound):
 		return "Categoria não encontrada.", true
+	// asset category
+	case errors.Is(err, assetcategory.ErrEmptyName):
+		return "O nome da categoria de ativo não pode ficar vazio.", true
+	case errors.Is(err, assetcategory.ErrDuplicateName):
+		return "Já existe uma categoria de ativo com esse nome.", true
+	case errors.Is(err, assetcategory.ErrNotFound):
+		return "Categoria de ativo não encontrada.", true
 	// categoryrule
 	case errors.Is(err, categoryrule.ErrEmptyMatch):
 		return "O texto da regra não pode ficar vazio.", true
@@ -1423,6 +1445,79 @@ func renderCategories(deps Deps, w http.ResponseWriter, req *http.Request, errMs
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = web.CategoriesPage(shellData(deps, req.Context(), "settings"), rows, errMsg).Render(req.Context(), w)
+}
+
+func assetCategoriesPage(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		renderAssetCategories(deps, w, req, "", http.StatusOK)
+	}
+}
+
+func assetCategoriesCreate(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		if _, err := deps.AssetCategories.Create(req.Context(), req.PostFormValue("name")); err != nil {
+			renderAssetCategories(deps, w, req, problemMsg(req, "Não foi possível criar a categoria de ativo. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/asset-categories", http.StatusSeeOther)
+	}
+}
+
+func assetCategoriesRename(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderAssetCategories(deps, w, req, "ID de categoria inválido.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.AssetCategories.Rename(req.Context(), id, req.PostFormValue("name")); err != nil {
+			renderAssetCategories(deps, w, req, problemMsg(req, "Não foi possível renomear a categoria de ativo. Verifique os dados e tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/asset-categories", http.StatusSeeOther)
+	}
+}
+
+func assetCategoriesDelete(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "requisição inválida", http.StatusBadRequest)
+			return
+		}
+		id, err := strconv.ParseInt(req.PostFormValue("id"), 10, 64)
+		if err != nil {
+			renderAssetCategories(deps, w, req, "ID de categoria inválido.", http.StatusBadRequest)
+			return
+		}
+		if err := deps.AssetCategories.Delete(req.Context(), id); err != nil {
+			renderAssetCategories(deps, w, req, problemMsg(req, "Não foi possível excluir a categoria de ativo. Tente novamente.", err), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, req, "/asset-categories", http.StatusSeeOther)
+	}
+}
+
+func renderAssetCategories(deps Deps, w http.ResponseWriter, req *http.Request, errMsg string, code int) {
+	var rows []web.AssetCategoryRow
+	cs, err := deps.AssetCategories.List(req.Context())
+	if err != nil {
+		logLoad(req, "asset categories list", err)
+		errMsg, code = loadErrorMsg, http.StatusInternalServerError
+	}
+	for _, c := range cs {
+		rows = append(rows, web.AssetCategoryRow{ID: c.ID, Name: c.Name})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_ = web.AssetCategoriesPage(shellData(deps, req.Context(), "settings"), rows, errMsg).Render(req.Context(), w)
 }
 
 func rulesPage(deps Deps) http.HandlerFunc {

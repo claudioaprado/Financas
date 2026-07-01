@@ -23,6 +23,7 @@ type Querier interface {
 	CategoryUsageCounts(ctx context.Context) ([]CategoryUsageCountsRow, error)
 	ClearCategoryFromTransactions(ctx context.Context, categoryID pgtype.Int8) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateAssetCategory(ctx context.Context, name string) (AssetCategory, error)
 	CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error)
 	// Auto-categorization rules (Story 7.2 / FR-17). A rule inherits its category's
 	// kind, so ListCategoryRules joins category to return kind + name for the matcher
@@ -42,6 +43,7 @@ type Querier interface {
 	CreateRecurring(ctx context.Context, arg CreateRecurringParams) (Recurring, error)
 	CreateSecurity(ctx context.Context, arg CreateSecurityParams) (Security, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
+	DeleteAssetCategory(ctx context.Context, id int64) (int64, error)
 	DeleteBudget(ctx context.Context, categoryID int64) (int64, error)
 	DeleteCategory(ctx context.Context, id int64) (int64, error)
 	DeleteCategoryRule(ctx context.Context, id int64) (int64, error)
@@ -56,6 +58,9 @@ type Querier interface {
 	// created_at — for a deterministic, byte-stable snapshot that restore (6.2)
 	// can re-insert parents-before-children.
 	ExportAccounts(ctx context.Context) ([]Account, error)
+	// Asset categories (owner-defined security classes). An independent authored
+	// table with no FKs yet, so it round-trips like any other parent.
+	ExportAssetCategories(ctx context.Context) ([]AssetCategory, error)
 	// Phase-2 authored tables (Epics 8-10) added to the backup round-trip: budgets,
 	// auto-categorization rules, recurring templates, and tags + their links. Each
 	// SELECT lists exactly its table's columns (model-struct order) so sqlc returns
@@ -72,6 +77,7 @@ type Querier interface {
 	ExportTransactionTags(ctx context.Context) ([]TransactionTag, error)
 	ExportTransactions(ctx context.Context) ([]Transaction, error)
 	GetAccount(ctx context.Context, id int64) (Account, error)
+	GetAssetCategory(ctx context.Context, id int64) (AssetCategory, error)
 	GetCategory(ctx context.Context, id int64) (Category, error)
 	GetDisplayCurrency(ctx context.Context) (string, error)
 	GetRecurring(ctx context.Context, id int64) (Recurring, error)
@@ -89,6 +95,7 @@ type Querier interface {
 	ListAccountTransactions(ctx context.Context, fromAccountID pgtype.Int8) ([]Transaction, error)
 	ListActiveAccounts(ctx context.Context) ([]Account, error)
 	ListAllAccounts(ctx context.Context) ([]Account, error)
+	ListAssetCategories(ctx context.Context) ([]AssetCategory, error)
 	ListBudgets(ctx context.Context) ([]ListBudgetsRow, error)
 	ListCategories(ctx context.Context) ([]Category, error)
 	// Categorized income/expense transactions with occurred_on before an exclusive
@@ -134,7 +141,9 @@ type Querier interface {
 	PriceEffectiveAt(ctx context.Context, arg PriceEffectiveAtParams) (decimal.Decimal, error)
 	RateEffectiveAt(ctx context.Context, arg RateEffectiveAtParams) (decimal.Decimal, error)
 	RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error)
+	RenameAssetCategory(ctx context.Context, arg RenameAssetCategoryParams) (int64, error)
 	RestoreDeleteAccounts(ctx context.Context) error
+	RestoreDeleteAssetCategories(ctx context.Context) error
 	RestoreDeleteBudgets(ctx context.Context) error
 	RestoreDeleteCategories(ctx context.Context) error
 	RestoreDeleteCategoryRules(ctx context.Context) error
@@ -152,6 +161,7 @@ type Querier interface {
 	// figures are never written; they recompute on read (AD-2).
 	RestoreDeleteTransactions(ctx context.Context) error
 	RestoreInsertAccount(ctx context.Context, arg RestoreInsertAccountParams) error
+	RestoreInsertAssetCategory(ctx context.Context, arg RestoreInsertAssetCategoryParams) error
 	RestoreInsertBudget(ctx context.Context, arg RestoreInsertBudgetParams) error
 	RestoreInsertCategory(ctx context.Context, arg RestoreInsertCategoryParams) error
 	RestoreInsertCategoryRule(ctx context.Context, arg RestoreInsertCategoryRuleParams) error
@@ -163,6 +173,7 @@ type Querier interface {
 	RestoreInsertTransaction(ctx context.Context, arg RestoreInsertTransactionParams) error
 	RestoreInsertTransactionTag(ctx context.Context, arg RestoreInsertTransactionTagParams) error
 	RestoreResetAccountSeq(ctx context.Context) error
+	RestoreResetAssetCategorySeq(ctx context.Context) error
 	RestoreResetBudgetSeq(ctx context.Context) error
 	RestoreResetCategoryRuleSeq(ctx context.Context) error
 	RestoreResetCategorySeq(ctx context.Context) error

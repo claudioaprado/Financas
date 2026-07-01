@@ -20,6 +20,7 @@ import (
 	apphttp "github.com/claudioaprado/financas/internal/http"
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/analytics"
+	"github.com/claudioaprado/financas/internal/service/assetcategory"
 	"github.com/claudioaprado/financas/internal/service/auth"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/budget"
@@ -76,24 +77,25 @@ func main() {
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: apphttp.NewRouter(apphttp.Deps{
-			Sessions:      sessions,
-			Auth:          authn,
-			Ready:         pool.Ping,
-			Settings:      settings.New(pool),
-			ExchangeRates: exchangerate.New(pool),
-			Prices:        price.New(pool),
-			Accounts:      account.New(pool),
-			Transactions:  transaction.New(pool),
-			Categories:    category.New(pool),
-			CategoryRules: categoryrule.New(pool),
-			Budgets:       budget.New(pool),
-			Analytics:     analytics.New(pool),
-			Recurring:     recurring.New(pool),
-			Securities:    security.New(pool),
-			Imports:       importer.New(pool),
-			Valuation:     valuation.New(pool),
-			Backup:        backup.New(pool),
-			OwnerName:     cfg.OwnerUsername,
+			Sessions:        sessions,
+			Auth:            authn,
+			Ready:           pool.Ping,
+			Settings:        settings.New(pool),
+			ExchangeRates:   exchangerate.New(pool),
+			Prices:          price.New(pool),
+			Accounts:        account.New(pool),
+			Transactions:    transaction.New(pool),
+			Categories:      category.New(pool),
+			AssetCategories: assetcategory.New(pool),
+			CategoryRules:   categoryrule.New(pool),
+			Budgets:         budget.New(pool),
+			Analytics:       analytics.New(pool),
+			Recurring:       recurring.New(pool),
+			Securities:      security.New(pool),
+			Imports:         importer.New(pool),
+			Valuation:       valuation.New(pool),
+			Backup:          backup.New(pool),
+			OwnerName:       cfg.OwnerUsername,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

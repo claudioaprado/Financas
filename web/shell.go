@@ -307,16 +307,16 @@ type TxRow struct {
 	Date         string // display date, dd/mm/aaaa (shown in tables)
 	EditDate     string // ISO YYYY-MM-DD, for the edit form <input type=date> (must round-trip through the parser)
 	Description  string
-	Counterparty string // other account name (transfers only)
-	Category     string // assigned category name (income/expense only)
-	CategoryID   int64  // for pre-selecting on edit
-	Amount       string // magnitude, for the edit form
-	Signed       string // e.g. "+100.0000 USD" / "-30.0000 USD"
-	Incoming     bool   // true when the row credits this account
-	Editable     bool   // income/expense only
-	Security     string // security symbol for trade rows (buy/sell/dividend)
-	Quantity     string // shares for trade rows
-	Price        string // per-share price for trade rows
+	Counterparty string   // other account name (transfers only)
+	Category     string   // assigned category name (income/expense only)
+	CategoryID   int64    // for pre-selecting on edit
+	Amount       string   // magnitude, for the edit form
+	Signed       string   // e.g. "+100.0000 USD" / "-30.0000 USD"
+	Incoming     bool     // true when the row credits this account
+	Editable     bool     // income/expense only
+	Security     string   // security symbol for trade rows (buy/sell/dividend)
+	Quantity     string   // shares for trade rows
+	Price        string   // per-share price for trade rows
 	Note         string   // free-text annotation (Story 10.2)
 	Tags         []string // reusable labels (Story 10.2)
 	TagsCSV      string   // Tags joined for the annotate-form input value
@@ -423,6 +423,12 @@ type CategoryRow struct {
 	Name  string
 	Kind  string
 	Count int64
+}
+
+// AssetCategoryRow is one owner-defined asset category on its management page.
+type AssetCategoryRow struct {
+	ID   int64
+	Name string
 }
 
 // CategoryTxRow is one transaction in a category summary.
@@ -570,21 +576,21 @@ type RegisterView struct {
 // are pre-formatted; Due drives the highlight + post/skip controls. NextDueValue
 // is the raw YYYY-MM-DD occurrence carried by the post/skip forms for idempotency.
 type RecurringRow struct {
-	ID           int64
-	Type         string // "income" | "expense" | "transfer"
-	TypeLabel    string
-	Account      string
-	Category     string
-	Amount       string
-	ToAmount     string
+	ID            int64
+	Type          string // "income" | "expense" | "transfer"
+	TypeLabel     string
+	Account       string
+	Category      string
+	Amount        string
+	ToAmount      string
 	CrossCurrency bool
-	Cadence      string
-	StartDate    string
-	EndDate      string // "—" when open-ended
-	NextDue      string
-	NextDueValue string // YYYY-MM-DD, posted back on post/skip
-	Description  string
-	Due          bool
+	Cadence       string
+	StartDate     string
+	EndDate       string // "—" when open-ended
+	NextDue       string
+	NextDueValue  string // YYYY-MM-DD, posted back on post/skip
+	Description   string
+	Due           bool
 }
 
 // RecurringForm is the create/edit form's field state (Epic 9). Empty ID ⇒ create;

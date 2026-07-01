@@ -20,6 +20,7 @@ import (
 	"github.com/claudioaprado/financas/internal/domain"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/service/account"
+	"github.com/claudioaprado/financas/internal/service/assetcategory"
 	"github.com/claudioaprado/financas/internal/service/backup"
 	"github.com/claudioaprado/financas/internal/service/budget"
 	"github.com/claudioaprado/financas/internal/service/category"
@@ -171,14 +172,14 @@ func (s *stubAccounts) List(_ context.Context, includeArchived bool) ([]account.
 // rows sharing an id (one per account), so List/Balance stay account-relative
 // exactly like the real service. Balances are computed in USD.
 type stubTransactions struct {
-	rows        []transaction.Transaction
-	nextID      int64
-	held        map[int64]*stubHolding // by security id
+	rows         []transaction.Transaction
+	nextID       int64
+	held         map[int64]*stubHolding // by security id
 	listErr      error
 	registerErr  error
-	oversold     []string // symbols returned as inconsistent (oversold) by Holdings
-	bulkIDs      []int64  // last BulkCategorize selection (Story 10.1)
-	bulkCategory int64    // last BulkCategorize target category
+	oversold     []string           // symbols returned as inconsistent (oversold) by Holdings
+	bulkIDs      []int64            // last BulkCategorize selection (Story 10.1)
+	bulkCategory int64              // last BulkCategorize target category
 	noteByID     map[int64]string   // last Annotate note per tx (Story 10.2)
 	tagsByID     map[int64][]string // last Annotate tags per tx
 }
@@ -526,6 +527,56 @@ func (s *stubCategories) Delete(_ context.Context, id int64, force bool) error {
 		}
 	}
 	return category.ErrNotFound
+}
+
+// stubAssetCategories is an in-memory AssetCategories for handler tests.
+type stubAssetCategories struct {
+	cats   []assetcategory.Category
+	nextID int64
+}
+
+func (s *stubAssetCategories) Create(_ context.Context, name string) (assetcategory.Category, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return assetcategory.Category{}, assetcategory.ErrEmptyName
+	}
+	for _, c := range s.cats {
+		if c.Name == name {
+			return assetcategory.Category{}, assetcategory.ErrDuplicateName
+		}
+	}
+	s.nextID++
+	c := assetcategory.Category{ID: s.nextID, Name: name}
+	s.cats = append(s.cats, c)
+	return c, nil
+}
+
+func (s *stubAssetCategories) List(_ context.Context) ([]assetcategory.Category, error) {
+	return s.cats, nil
+}
+
+func (s *stubAssetCategories) Rename(_ context.Context, id int64, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return assetcategory.ErrEmptyName
+	}
+	for i := range s.cats {
+		if s.cats[i].ID == id {
+			s.cats[i].Name = name
+			return nil
+		}
+	}
+	return assetcategory.ErrNotFound
+}
+
+func (s *stubAssetCategories) Delete(_ context.Context, id int64) error {
+	for i := range s.cats {
+		if s.cats[i].ID == id {
+			s.cats = append(s.cats[:i], s.cats[i+1:]...)
+			return nil
+		}
+	}
+	return assetcategory.ErrNotFound
 }
 
 // stubImports is an in-memory Imports for handler tests. It uses the real (pure)
@@ -1037,24 +1088,25 @@ func cannedExport() backup.Export {
 
 func testDeps(authOK bool, ready ReadyCheck) Deps {
 	return Deps{
-		Sessions:      scs.New(),
-		Auth:          stubAuth{ok: authOK},
-		Ready:         ready,
-		Settings:      &stubSettings{},
-		ExchangeRates: &stubExchangeRates{},
-		Prices:        &stubPrices{},
-		Accounts:      &stubAccounts{},
-		Transactions:  &stubTransactions{},
-		Categories:    &stubCategories{usage: map[int64]int64{}},
-		CategoryRules: &stubCategoryRules{},
-		Budgets:       &stubBudgets{},
-		Analytics:     &stubAnalytics{report: cannedAnalytics()},
-		Recurring:     &stubRecurring{},
-		Securities:    &stubSecurities{},
-		Imports:       &stubImports{},
-		Valuation:     &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
-		Backup:        &stubBackup{export: cannedExport()},
-		OwnerName:     "TestOwner",
+		Sessions:        scs.New(),
+		Auth:            stubAuth{ok: authOK},
+		Ready:           ready,
+		Settings:        &stubSettings{},
+		ExchangeRates:   &stubExchangeRates{},
+		Prices:          &stubPrices{},
+		Accounts:        &stubAccounts{},
+		Transactions:    &stubTransactions{},
+		Categories:      &stubCategories{usage: map[int64]int64{}},
+		AssetCategories: &stubAssetCategories{},
+		CategoryRules:   &stubCategoryRules{},
+		Budgets:         &stubBudgets{},
+		Analytics:       &stubAnalytics{report: cannedAnalytics()},
+		Recurring:       &stubRecurring{},
+		Securities:      &stubSecurities{},
+		Imports:         &stubImports{},
+		Valuation:       &stubValuation{portfolio: cannedPortfolio(), dashboard: cannedDashboard(), series: cannedSeries(), allocation: cannedAllocation(), insight: cannedInsight()},
+		Backup:          &stubBackup{export: cannedExport()},
+		OwnerName:       "TestOwner",
 	}
 }
 
@@ -1717,6 +1769,64 @@ func TestAccountsInvalidCreate(t *testing.T) {
 	}
 }
 
+func TestAssetCategoriesFlow(t *testing.T) {
+	router := NewRouter(testDeps(true, nil))
+	recLogin := httptest.NewRecorder()
+	router.ServeHTTP(recLogin, loginPost("owner", "right"))
+	cookie := sessionCookie(t, recLogin)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		router.ServeHTTP(rec, withCookie(req, cookie))
+		return rec
+	}
+	body := func() string {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, withCookie(httptest.NewRequest(http.MethodGet, "/asset-categories", nil), cookie))
+		return rec.Body.String()
+	}
+
+	// Use names NOT present in the page's static help text (which lists example
+	// classes), so substring checks reflect real data.
+	const nameA, nameB = "ClasseAlfa", "ClasseBeta"
+
+	// The page renders with the create form.
+	if !strings.Contains(body(), "Categorias de ativos") {
+		t.Fatalf("GET /asset-categories missing heading")
+	}
+	// Create.
+	if rec := post("/asset-categories", "name="+nameA); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create = %d, want 303", rec.Code)
+	}
+	if !strings.Contains(body(), nameA) {
+		t.Errorf("created category not listed")
+	}
+	// Empty name is rejected.
+	if rec := post("/asset-categories", "name=+"); rec.Code != http.StatusBadRequest {
+		t.Errorf("empty name = %d, want 400", rec.Code)
+	}
+	// Duplicate name is rejected.
+	if rec := post("/asset-categories", "name="+nameA); rec.Code != http.StatusBadRequest {
+		t.Errorf("duplicate = %d, want 400", rec.Code)
+	}
+	// Rename (id=1, the first created).
+	if rec := post("/asset-categories/rename", "id=1&name="+nameB); rec.Code != http.StatusSeeOther {
+		t.Fatalf("rename = %d, want 303", rec.Code)
+	}
+	if b := body(); !strings.Contains(b, nameB) || strings.Contains(b, nameA) {
+		t.Errorf("rename not reflected")
+	}
+	// Delete.
+	if rec := post("/asset-categories/delete", "id=1"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete = %d, want 303", rec.Code)
+	}
+	if strings.Contains(body(), nameB) {
+		t.Errorf("deleted category still listed")
+	}
+}
+
 func TestAccountsCreateWithInitialBalance(t *testing.T) {
 	router := NewRouter(testDeps(true, nil))
 	recLogin := httptest.NewRecorder()
@@ -2149,21 +2259,22 @@ func TestPricesAddAndList(t *testing.T) {
 func TestHoldingValuationColumns(t *testing.T) {
 	txs := &stubTransactions{}
 	deps := Deps{
-		Sessions:      scs.New(),
-		Auth:          stubAuth{ok: true},
-		Settings:      &stubSettings{},
-		ExchangeRates: &stubExchangeRates{},
-		Prices:        &stubPrices{},
-		Accounts:      &stubAccounts{},
-		Transactions:  txs,
-		Categories:    &stubCategories{usage: map[int64]int64{}},
-		CategoryRules: &stubCategoryRules{},
-		Budgets:       &stubBudgets{},
-		Analytics:     &stubAnalytics{report: cannedAnalytics()},
-		Recurring:     &stubRecurring{},
-		Securities:    &stubSecurities{},
-		Imports:       &stubImports{},
-		OwnerName:     "TestOwner",
+		Sessions:        scs.New(),
+		Auth:            stubAuth{ok: true},
+		Settings:        &stubSettings{},
+		ExchangeRates:   &stubExchangeRates{},
+		Prices:          &stubPrices{},
+		Accounts:        &stubAccounts{},
+		Transactions:    txs,
+		Categories:      &stubCategories{usage: map[int64]int64{}},
+		AssetCategories: &stubAssetCategories{},
+		CategoryRules:   &stubCategoryRules{},
+		Budgets:         &stubBudgets{},
+		Analytics:       &stubAnalytics{report: cannedAnalytics()},
+		Recurring:       &stubRecurring{},
+		Securities:      &stubSecurities{},
+		Imports:         &stubImports{},
+		OwnerName:       "TestOwner",
 	}
 	router := NewRouter(deps)
 	recLogin := httptest.NewRecorder()
