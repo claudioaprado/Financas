@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/account"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 func testDatabaseURL(t *testing.T) string {
@@ -52,6 +54,9 @@ func TestCategory(t *testing.T) {
 	}
 	if _, err := svc.Create(ctx, "  ", Income); !errors.Is(err, ErrEmptyName) {
 		t.Errorf("empty name = %v; want ErrEmptyName", err)
+	}
+	if _, err := svc.Create(ctx, strings.Repeat("x", validate.MaxNameLen+1), Income); !errors.Is(err, validate.ErrNameTooLong) {
+		t.Errorf("over-long name = %v; want ErrNameTooLong", err)
 	}
 	if _, err := svc.Create(ctx, "Bad", Kind("savings")); !errors.Is(err, ErrInvalidKind) {
 		t.Errorf("bad kind = %v; want ErrInvalidKind", err)

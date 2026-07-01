@@ -39,6 +39,7 @@ import (
 	"github.com/claudioaprado/financas/internal/service/security"
 	"github.com/claudioaprado/financas/internal/service/transaction"
 	"github.com/claudioaprado/financas/internal/service/valuation"
+	"github.com/claudioaprado/financas/internal/validate"
 	"github.com/claudioaprado/financas/web"
 )
 
@@ -439,6 +440,15 @@ func knownErrMsg(err error) (string, bool) {
 		return "Já existe um ativo com esse código.", true
 	case errors.Is(err, security.ErrNotFound):
 		return "Ativo não encontrado.", true
+	// shared free-text validation (accounts, categories, securities)
+	case errors.Is(err, validate.ErrNameTooLong):
+		return fmt.Sprintf("O nome é muito longo (máx. %d caracteres).", validate.MaxNameLen), true
+	case errors.Is(err, validate.ErrNameBadChars):
+		return "O nome contém caracteres inválidos.", true
+	case errors.Is(err, validate.ErrSymbolTooLong):
+		return fmt.Sprintf("O código do ativo é muito longo (máx. %d caracteres).", validate.MaxSymbolLen), true
+	case errors.Is(err, validate.ErrSymbolBadChars):
+		return "O código do ativo não pode conter espaços ou caracteres inválidos.", true
 	// price
 	case errors.Is(err, price.ErrSecurityNotFound):
 		return "Ativo não encontrado.", true

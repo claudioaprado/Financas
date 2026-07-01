@@ -22,6 +22,7 @@ import (
 
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 // AccountType is the kind of account, which fixes its balance semantics.
@@ -84,6 +85,9 @@ func (s *Service) Create(ctx context.Context, name string, typ AccountType, curr
 	if name == "" {
 		return Account{}, ErrEmptyName
 	}
+	if err := validate.Name(name); err != nil {
+		return Account{}, err
+	}
 	if !typ.IsValid() {
 		return Account{}, ErrInvalidType
 	}
@@ -117,6 +121,9 @@ func (s *Service) Rename(ctx context.Context, id int64, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ErrEmptyName
+	}
+	if err := validate.Name(name); err != nil {
+		return err
 	}
 
 	tx, err := s.pool.Begin(ctx)

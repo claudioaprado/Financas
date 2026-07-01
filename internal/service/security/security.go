@@ -24,6 +24,7 @@ import (
 
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 // SecurityType is the kind of instrument.
@@ -92,8 +93,14 @@ func (s *Service) Create(ctx context.Context, symbol, name string, typ SecurityT
 	if symbol == "" {
 		return Security{}, ErrEmptySymbol
 	}
+	if err := validate.Symbol(symbol); err != nil {
+		return Security{}, err
+	}
 	if name == "" {
 		return Security{}, ErrEmptyName
+	}
+	if err := validate.Name(name); err != nil {
+		return Security{}, err
 	}
 	if !typ.IsValid() {
 		return Security{}, ErrInvalidType

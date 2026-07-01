@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 // Kind is a category's type: it may only be assigned to a matching transaction.
@@ -68,6 +69,9 @@ func (s *Service) Create(ctx context.Context, name string, kind Kind) (Category,
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Category{}, ErrEmptyName
+	}
+	if err := validate.Name(name); err != nil {
+		return Category{}, err
 	}
 	if !kind.IsValid() {
 		return Category{}, ErrInvalidKind

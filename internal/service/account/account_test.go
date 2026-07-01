@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/claudioaprado/financas/db"
 	"github.com/claudioaprado/financas/internal/money"
 	"github.com/claudioaprado/financas/internal/store"
+	"github.com/claudioaprado/financas/internal/validate"
 )
 
 func testDatabaseURL(t *testing.T) string {
@@ -67,6 +69,9 @@ func TestAccount(t *testing.T) {
 	}
 	if _, err := svc.Create(ctx, name("Bad"), AccountType("savings"), money.USD); !errors.Is(err, ErrInvalidType) {
 		t.Errorf("invalid-type create = %v; want ErrInvalidType", err)
+	}
+	if _, err := svc.Create(ctx, strings.Repeat("x", validate.MaxNameLen+1), Cash, money.USD); !errors.Is(err, validate.ErrNameTooLong) {
+		t.Errorf("over-long name = %v; want ErrNameTooLong", err)
 	}
 	if _, err := svc.Create(ctx, name("Bad"), Cash, money.Currency("EUR")); !errors.Is(err, ErrUnsupportedCurrency) {
 		t.Errorf("unsupported-currency create = %v; want ErrUnsupportedCurrency", err)
